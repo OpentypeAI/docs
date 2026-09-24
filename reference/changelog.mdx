@@ -11,7 +11,7 @@ This page records changes to the OpenType API contract and to what an account ca
 
 ### Accounts and billing
 
-- **Open sign-up.** Anyone can create an account in the [console](https://console.opentype.dev). Verifying your email adds $5 of free credit, once per email address. See [Create an account](/getting-started/create-an-account).
+- **Open sign-up.** Anyone can [create an account](https://console.opentype.dev/sign-up) in the console. Verifying your email adds $5 of free credit, once per email address. See [Create an account](/getting-started/create-an-account).
 - **Billing routes.** `GET /v1/billing` returns your balance, auto-recharge settings and the last 50 transactions. `POST /v1/billing/checkout` returns a Stripe checkout page for a purchase from $5 to $1,000. `POST /v1/billing/portal` opens the Stripe billing portal for saved cards and receipts. `PUT /v1/billing/auto-recharge` tops your balance up when it falls below a threshold. See [Credits and billing](/guides/credits-and-billing) and [Auto-recharge](/guides/auto-recharge).
 - **`billing_read` scope.** Reading billing needs `billing_read`; buying credits and changing auto-recharge need `billing_write`. See [Scopes](/reference/scopes).
 - **`402 insufficient_credits`.** `POST /v1/runs` refuses a run the balance cannot cover. Nothing is stored, so the same `Idempotency-Key` works once you add credits. See [Handling insufficient credits](/guides/handling-insufficient-credits).
