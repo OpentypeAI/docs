@@ -1,0 +1,38 @@
+---
+title: "Introduction"
+description: "One model call per run. You send typed questions or a JSON Schema; OpenType routes, calls one model, checks the answer, and returns it."
+---
+
+OpenType turns a language model into a function your code can call. Every run is one HTTP request to `POST /v1/runs`, and it comes back in one of two shapes:
+
+- **Decision.** You send the thing being decided about (`state`) and a set of typed questions: yes/no (`noul`), one-of-N (`choice`), or an ordered level (`score`). You get a probability for every answer you defined, so you can set a threshold on it.
+- **Verdict.** You send messages and a JSON Schema. You get a JSON document that has already been validated against your schema.
+
+You never pick a model. The request has no `model` field: OpenType picks a route from its catalog and makes one provider call. A decision response names the model that answered, so a probability can be traced back to it.
+
+<Columns cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create a key and send your first decision run.
+  </Card>
+  <Card title="Concepts" icon="shapes" href="/concepts">
+    Runs, decision questions, verdicts, and what each field means.
+  </Card>
+  <Card title="Decision runs" icon="split" href="/guides/decision-runs">
+    Triage, classification, and thresholds, end to end.
+  </Card>
+  <Card title="API reference" icon="square-terminal" href="/api-reference/introduction">
+    Every endpoint, generated from the OpenAPI document.
+  </Card>
+</Columns>
+
+## What every request has in common
+
+| | |
+| --- | --- |
+| Base URL | `https://api.opentype.dev` |
+| Auth | `Authorization: Bearer otsk_...` ([Authentication](/authentication)) |
+| Body | JSON, snake_case, unknown fields rejected |
+| Money | integer micro-USD in fields ending `_micros` (1,000,000 = $1) |
+| Timestamps | RFC 3339 UTC, fields ending `_at` |
+| IDs | opaque prefixed strings: `run_...`, `key_...`, `req_...` |
+| Errors | `{"error": {"code", "message", "request_id"}}` ([Errors](/errors)) |

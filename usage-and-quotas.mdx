@@ -1,0 +1,107 @@
+---
+title: "Usage and quotas"
+description: "Read what your organization spent, per run and per provider call, and how much of the period's quota is left."
+---
+
+All four routes require the `usage_read` scope and cover the calling key's organization only. Money is integer micro-USD (`1_000_000` = $1).
+
+| Route | Returns |
+| --- | --- |
+| `GET /v1/usage` | Totals over a window: run counts, tokens, spend |
+| `GET /v1/usage/ledger` | One row per provider call, newest first |
+| `GET /v1/usage/runs/{run_id}` | One run's tokens, spend, ceiling, and attempts |
+| `GET /v1/quota` | Period limits, consumption, and what remains |
+
+## Windows
+
+`GET /v1/usage` and `GET /v1/usage/ledger` take an optional `start_at` and `end_at`.
+
+- Both bounds or neither. Sending only one is `400 invalid_parameter`.
+- Omit both to read the organization's **current quota period**.
+- Format: exactly `YYYY-MM-DDTHH:MM:SSZ` (UTC, whole seconds), and `start_at` must come before `end_at`.
+
+<CodeGroup>
+
+```bash cURL
+curl -sS "https://api.opentype.dev/v1/usage?start_at=2026-09-01T00:00:00Z&end_at=2026-10-01T00:00:00Z" \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const params = new URLSearchParams({ start_at: "2026-09-01T00:00:00Z", end_at: "2026-10-01T00:00:00Z" });
+const res = await fetch(`https://api.opentype.dev/v1/usage?${params}`, {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+const usage = await res.json();
+console.log(usage.spend.settled_micros / 1e6, "USD settled");
+```
+
+```python Python
+import os, requests
+
+usage = requests.get(
+    "https://api.opentype.dev/v1/usage",
+    params={"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+).json()
+print(usage["spend"]["settled_micros"] / 1e6, "USD settled")
+```
+
+</CodeGroup>
+
+```json
+{
+  "organization_id": "org_...",
+  "window": {"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
+  "runs": {"total": 1204, "completed": 1190, "failed": 12, "in_flight": 2},
+  "tokens": {"input_tokens": 488120, "output_tokens": 30211, "total_tokens": 518331},
+  "spend": {"reserved_micros": 10000, "settled_micros": 3612, "unsettled_micros": 10000}
+}
+```
+
+- **`reserved_micros`**: amounts held for runs before their provider call.
+- **`settled_micros`**: what completed and failed calls actually cost.
+- **`unsettled_micros`**: reservations still held by in-flight runs.
+
+## Ledger
+
+`GET /v1/usage/ledger` returns one entry per provider call, from an append-only table: an entry never changes after it is written. `limit` defaults to 50. Values above 200 are lowered to 200, and `0` is `400 invalid_parameter`.
+
+Each entry has `run_id`, `retry_ordinal`, `provider`, `model_id`, `provider_request_id` (when the provider assigned one), `status` (`succeeded` or `failed`), `tokens`, `cost_micros`, and `created_at`.
+
+To reconcile against a provider invoice, match on `provider_request_id`. Remember that runs with `cost_basis: "estimated"` are priced from the catalog, so they will not match the provider line for line.
+
+## One run
+
+`GET /v1/usage/runs/{run_id}` returns the run's `state`, `tokens`, `spend`, its `ceiling_micros`, and every attempt as ledger entries. A run that does not belong to your organization returns `404 run_not_found`, the same as a run that does not exist.
+
+## Quota
+
+```bash
+curl -sS https://api.opentype.dev/v1/quota -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```json
+{
+  "organization_id": "org_...",
+  "period": {"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
+  "limits": {"period_spend_limit_micros": 50000000, "period_token_limit": null, "request_spend_ceiling_micros": 5000},
+  "consumed_tokens": {"input_tokens": 488120, "output_tokens": 30211, "total_tokens": 518331},
+  "consumed_spend": {"reserved_micros": 10000, "settled_micros": 3612, "unsettled_micros": 10000},
+  "remaining_spend_micros": 49990000,
+  "remaining_tokens": null
+}
+```
+
+- A `null` period limit means no organization-level limit is set. The per-request ceiling still applies to every run and is never above 5,000 micro-USD.
+- Spend counts against the limit as the larger of settled spend and reserved spend. In-flight runs therefore count before they settle.
+
+When a quota refuses a run, the response is `429`. The error carries `retryable`, which tells you whether waiting can help:
+
+| Code | `retryable` | Meaning |
+| --- | --- | --- |
+| `provider_spend_ceiling_exceeded` | `false` | This request's estimated cost is above the per-request ceiling. The same body will always be refused, so make it smaller. |
+| `organization_spend_quota_exhausted` | `true` | The period's spend allowance has no room left. It clears when the period rolls over. |
+| `organization_token_quota_exhausted` | `true` | The period's token allowance has no room left. It clears when the period rolls over. |
+
+A quota refusal happens before any provider call, so nothing is charged.

@@ -1,0 +1,43 @@
+---
+title: "Rate limits"
+description: "The hard per-request limits, and the quota refusals that exist today."
+---
+
+OpenType does not publish requests-per-second or requests-per-minute limits. What it enforces are limits **per request** and, when your organization has them, **quotas per period**.
+
+## Per-request limits
+
+These apply to every `POST /v1/runs`, before any provider call:
+
+| Limit | Value | Refusal |
+| --- | --- | --- |
+| Body size | 1 MiB | `413 body_too_large` |
+| Estimated input | 64,000 tokens | `413 input_too_large` |
+| Provider spend | 5,000 micro-USD ($0.005) per run, or less if your organization sets a lower ceiling | `503 budget_exhausted` |
+| Deadline | 30 s default, 120 s maximum (`deadline_ms`) | `504 deadline_exceeded` |
+| List page | `GET /v1/runs`: `limit` 1 to 100, default 20. `GET /v1/usage/ledger`: 1 to 200, default 50. Larger values are lowered to the maximum. | none |
+
+## Period quotas
+
+An organization can have a spend limit and a token limit per quota period. `GET /v1/quota` returns the limits, what has been consumed, and what remains ([Usage and quotas](/usage-and-quotas#quota)). A quota refusal is `429` and says whether waiting helps:
+
+```json
+{
+  "error": {
+    "code": "organization_spend_quota_exhausted",
+    "message": "the estimated provider spend of 5000 micro-USD exceeds the 1200 micro-USD remaining in this quota period",
+    "request_id": "req_...",
+    "retryable": true
+  }
+}
+```
+
+| Code | `retryable` | What to do |
+| --- | --- | --- |
+| `provider_spend_ceiling_exceeded` | `false` | Shrink the request, for example fewer `draws`, a lower `max_output_tokens`, or a smaller input. Retrying unchanged will always fail. |
+| `organization_spend_quota_exhausted` | `true` | Wait for `period.end_at` from `GET /v1/quota`, or ask an owner to raise the limit. |
+| `organization_token_quota_exhausted` | `true` | Same as above. |
+
+## Upstream provider limits
+
+When an upstream provider rate-limits OpenType, your run fails with `503 provider_rate_limited`, not `429`. The limit belongs to OpenType's provider account, not to your organization. Retry with exponential backoff and the **same** `Idempotency-Key`.

@@ -1,0 +1,88 @@
+---
+title: "Streaming"
+description: "Watch a run's state over Server-Sent Events. The answer arrives once, whole and validated."
+---
+
+`GET /v1/runs/{run_id}/stream` returns `text/event-stream`. It **observes** a run: it reads stored state, never calls a provider, and so never costs anything. Requires `runs_read`.
+
+<Note>
+This is not token streaming. A verdict is only valid once the whole document has passed your schema, so OpenType never sends partial output. The answer appears once, complete, in the `terminal` event.
+</Note>
+
+## Events
+
+The response contains at most two events, then closes:
+
+| Event | When | `data` |
+| --- | --- | --- |
+| `state` | always, first | `{"run_id", "state"}` |
+| `terminal` | only if the run is `completed` or `failed` | `{"run_id", "state", "input_digest", "output_digest", "kind", "verdict" or "decision"}` |
+
+`kind` and the answer appear only on a completed run that stored one. The answer uses the same shape as in `RunResponse`. Each `data` line is one line of JSON.
+
+```text
+event: state
+data: {"run_id":"run_0b6f0e2a9f4c4b1c9a3d5e7f8a9b0c1d","state":"completed"}
+
+event: terminal
+data: {"run_id":"run_0b6f0e2a9f4c4b1c9a3d5e7f8a9b0c1d","state":"completed","input_digest":"9f2c...","output_digest":"41ab...","kind":"decision","decision":{"answers":{...},"draws":1,"read":"slot_constrained"}}
+```
+
+If the run is still in flight, you get only the `state` event. Reconnect after a short delay to observe it again.
+
+## Consume it
+
+<CodeGroup>
+
+```bash cURL
+curl -sN https://api.opentype.dev/v1/runs/$RUN_ID/stream \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+async function observe(runId: string) {
+  const res = await fetch(`https://api.opentype.dev/v1/runs/${runId}/stream`, {
+    headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+  });
+  if (!res.ok) throw new Error((await res.json()).error.code);
+  const events: Record<string, any> = {};
+  for (const frame of (await res.text()).split("\n\n")) {
+    const event = frame.match(/^event: (.+)$/m)?.[1];
+    const data = frame.match(/^data: (.+)$/m)?.[1];
+    if (event && data) events[event] = JSON.parse(data);
+  }
+  return events.terminal ?? events.state; // no terminal yet: poll again later
+}
+```
+
+```python Python
+import json, os, requests
+
+def observe(run_id: str) -> dict:
+    res = requests.get(
+        f"https://api.opentype.dev/v1/runs/{run_id}/stream",
+        headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+        timeout=30,
+    )
+    res.raise_for_status()
+    events = {}
+    for frame in res.text.split("\n\n"):
+        lines = dict(line.split(": ", 1) for line in frame.splitlines() if ": " in line)
+        if "event" in lines and "data" in lines:
+            events[lines["event"]] = json.loads(lines["data"])
+    return events.get("terminal") or events["state"]  # no terminal yet: poll again later
+```
+
+</CodeGroup>
+
+The response is sent with `Cache-Control: no-cache, no-store` and `X-Accel-Buffering: no`, so proxies pass it through without buffering.
+
+## When to use it
+
+`POST /v1/runs` already waits for the answer and returns it with `200`. Use the stream, or `GET /v1/runs/{run_id}`, when you hold a `run_id` but not the answer. For example, after a `202` from a replayed `Idempotency-Key`, or from a different process than the one that created the run.
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `400` | `invalid_run_id` | Not a `run_...` id. |
+| `404` | `run_not_found` | No such run for your organization. |
+| `503` | `not_configured`, `database_unavailable` | Stored state is unavailable. Retry later. |

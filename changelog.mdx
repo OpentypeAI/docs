@@ -1,0 +1,14 @@
+---
+title: "Changelog"
+description: "Changes to the OpenType API contract."
+---
+
+<Update label="2026-09-24" description="v0.1.0">
+  First public contract.
+
+  - `POST /v1/runs` with two kinds: `verdict` (JSON Schema, validated) and `decision` (`noul`, `choice`, and `score` questions with `depends_on`, `ask_if`, `alone`, `draws`, and `think_tokens`).
+  - `GET /v1/runs`, `GET /v1/runs/{run_id}`, and `GET /v1/runs/{run_id}/stream` (an observation-only SSE stream).
+  - API keys (`otsk_...`) with scopes, rotation, and idempotent revocation.
+  - Organization members: list, invite, change role, and remove (removing a member revokes their keys).
+  - Usage rollup, per-call ledger, per-run usage, and quota.
+</Update>

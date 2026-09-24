@@ -1,0 +1,141 @@
+---
+title: "Errors"
+description: "The error envelope, the status map, and every error code the API returns."
+---
+
+Every error has the same JSON body:
+
+```json
+{
+  "error": {
+    "code": "idempotency_conflict",
+    "message": "this idempotency key was already used with a different body",
+    "request_id": "req_4f1c9e0b2a7d4c6e8f0a1b2c3d4e5f60"
+  }
+}
+```
+
+- **`code`** is stable snake_case. Branch on it.
+- **`message`** is for humans. It may change, and it never contains provider output or your prompt.
+- **`request_id`** identifies the request. Include it when you contact support.
+
+Two codes add a field. `verdict_schema_violation` adds `violations`: up to 10 JSON Pointers into the rejected document, such as `/risk/score`. Quota refusals (`429`) add `retryable`.
+
+## Status codes
+
+| Status | Meaning | Retry? |
+| --- | --- | --- |
+| `400` | The request is malformed. | No. Fix the request. |
+| `401` | The credential is missing or was rejected. | No. Fix the credential. |
+| `402` | Prepaid credits cannot cover the run. | After you add credits. |
+| `403` | The credential is valid but not allowed to do this. | No. |
+| `404` | No such resource in your organization. | No. |
+| `409` | The request conflicts with stored state. | No. |
+| `413` | The body or the input is too large. | No. Make it smaller. |
+| `429` | A quota refused the run. | Only if `retryable` is `true`. |
+| `500` | Unexpected internal failure. | With backoff. |
+| `503` | OpenType cannot serve this safely right now. The service fails closed. | With backoff, reusing the **same** `Idempotency-Key`. |
+| `504` | The deadline passed before a route was chosen. | With backoff. |
+
+<Tip>
+Always retry a `POST /v1/runs` with the same `Idempotency-Key`. If the first attempt did reach a provider, the retry returns that stored run instead of paying twice.
+</Tip>
+
+## Runs
+
+Returned by `/v1/runs` and its sub-routes.
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `400` | `invalid_body` | The body is not valid JSON, has an unknown field, or has fields that do not match its `kind`. |
+| `400` | `idempotency_key_required` | `POST /v1/runs` has no `Idempotency-Key` header. |
+| `400` | `invalid_idempotency_key` | The key is empty or longer than 255 bytes. |
+| `400` | `invalid_run_id` | The path id is not a `run_...` id. |
+| `400` | `invalid_verdict_schema` | The verdict schema is outside the [bounds](/concepts#verdicts), or `capability_hint` is invalid. Nothing was charged. |
+| `400` | `invalid_decision_questions` | The question set is outside the [bounds](/concepts#bounds). Nothing was charged. |
+| `404` | `run_not_found` | No such run in your organization. |
+| `409` | `idempotency_conflict` | This `Idempotency-Key` was already used with a different body. |
+| `413` | `body_too_large` | The body is over 1 MiB. |
+| `413` | `input_too_large` | The estimated input is over 64,000 tokens. |
+| `500` | `internal_error` | Unexpected internal failure. |
+| `503` | `not_configured` | A dependency the run needs is not configured. |
+| `503` | `no_route_available` | No catalog route fits this run (see `capability_hint`). |
+| `503` | `budget_exhausted` | The run's spend budget had no room for the call. |
+| `503` | `verdict_schema_violation` | No attempt produced a document that satisfies your schema. Carries `violations`. The attempts are billed. |
+| `503` | `decision_unavailable` | No decision-capable route, or the provider refused the question set. |
+| `503` | `neo_unavailable` | The verdict validator is unavailable. |
+| `503` | `catalog_unavailable` | The model catalog is unavailable. |
+| `503` | `database_unavailable` | Stored state is unavailable. |
+| `503` | `provider_unauthorized` | The upstream provider rejected OpenType's credential. |
+| `503` | `provider_rate_limited` | The upstream provider is rate-limiting OpenType. |
+| `503` | `provider_rejected_request` | The upstream provider refused the request. |
+| `503` | `provider_unavailable` | The upstream provider is unreachable or failing. |
+| `503` | `provider_malformed_response` | The upstream provider returned something that could not be decoded. |
+| `504` | `deadline_exceeded` | The deadline (`deadline_ms`, at most 120 s) passed. |
+
+## Authentication
+
+Returned by every authenticated route.
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `401` | `missing_credentials` | No `Authorization: Bearer` header. |
+| `401` | `invalid_credential` | The credential was rejected. |
+| `403` | `no_active_organization` | The credential names no organization. |
+| `403` | `scope_denied` | The credential lacks the route's [scope](/authentication#scopes). The message names the scope. |
+| `503` | `auth_not_configured` | OpenType cannot verify credentials. |
+| `503` | `trust_keys_unavailable` | The keys used to verify credentials are unavailable. |
+
+## Keys and members
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `400` | `empty_scopes` | A key must request at least one scope. |
+| `400` | `malformed_key_id` | The path id is not a `key_...` id. |
+| `400` | `secret_in_path` | A secret (`otsk_...`) was sent where a key id belongs. Treat that secret as leaked and rotate it. |
+| `403` | `scope_exceeds_creator` | A requested scope is not held by the account creating the key. |
+| `403` | `principal_is_not_the_caller` | A key may act as its creator or as a service account, not as another user. |
+| `403` | `role_exceeds_caller` | The role is above the caller's own. |
+| `403` | `target_outranks_caller` | The member outranks the caller. |
+| `403` | `indeterminate_role` | The caller's role could not be determined from its scopes. |
+| `404` | `key_not_found` | No such key in your organization. |
+| `404` | `member_not_found` | No such member in your organization. |
+| `409` | `key_revoked` | A revoked key cannot be rotated. |
+| `409` | `last_owner` | The change would leave the organization with no owner. |
+
+## Usage and quota
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `400` | `invalid_parameter` | A malformed window, `limit`, or `run_id`. The message says which. |
+| `429` | `provider_spend_ceiling_exceeded` | The request's estimated cost is above the per-request ceiling. `retryable: false`. |
+| `429` | `organization_spend_quota_exhausted` | The period spend allowance is used up. `retryable: true`. |
+| `429` | `organization_token_quota_exhausted` | The period token allowance is used up. `retryable: true`. |
+
+## Billing
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `402` | `insufficient_credits` | Your prepaid balance cannot cover the run. Nothing was charged. See [Billing and credits](/billing-and-credits). |
+
+## Storage
+
+Any route that reads or writes stored state can also return these.
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `409` | `run_already_terminal` | The run has already reached a terminal state. |
+| `503` | `database_not_configured` | Storage is not configured. |
+| `503` | `database_unavailable` | Storage is unreachable. |
+
+## Console session routes
+
+The console's `/v1/auth/*` routes are not part of the public API, but they use the same envelope:
+
+| Status | Code |
+| --- | --- |
+| `400` | `invalid_request` |
+| `401` | `unauthenticated` |
+| `403` | `no_active_organization`, `role_not_mapped`, `permission_denied`, `organization_mismatch` |
+| `404` | `not_found` |
+| `503` | `directory_not_configured`, `directory_unavailable`, `directory_refused` |

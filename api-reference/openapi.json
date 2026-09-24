@@ -1,0 +1,3788 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OpenType API",
+    "description": "HTTP edge for the OpenType service. Routes are added as their readiness checks land; a documented route is not a claim that a provider, database, or accelerator is live.",
+    "license": {
+      "name": "Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Liveness. Public and unauthenticated: it reports that the process is up, not\nthat any dependency is ready.",
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "description": "The process is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness. Every dependency that is required to serve traffic must pass here\nbefore this returns `200`; an absent dependency keeps the instance out of\nrotation rather than letting a request fail downstream.",
+        "operationId": "readyz",
+        "responses": {
+          "200": {
+            "description": "Every required dependency is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required dependency is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/callback": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Completes sign-in by exchanging the one-time code for a session.",
+        "operationId": "callback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A new session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or blank code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is not configured or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/invitations": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Lists the session organization's invitations, optionally filtered by state.",
+        "operationId": "list_invitations",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Filter to one state. Absent means every state.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/InvitationState"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invitations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The session lacks members:read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is not configured or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "workos_bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Invites an email address to the session's organization.",
+        "description": "The organization comes from verified claims, never from the body, so an\nadmin of one organization cannot invite into another.",
+        "operationId": "create_invitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvitationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The invitation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed email, or a role this service does not map",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The session lacks members:write",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is not configured or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "workos_bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/invitations/{invitation_id}/revoke": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Revokes an invitation.",
+        "description": "A state transition with an audit trail rather than a deletion, which is why\nit is a `POST` to a sub-resource and returns the revoked invitation.",
+        "operationId": "revoke_invitation",
+        "parameters": [
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The revoked invitation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The session lacks members:write",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown invitation for this organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is not configured or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "workos_bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/organizations": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Every organization the verified user belongs to, which is what the\norganization switcher lists.",
+        "operationId": "list_organizations",
+        "responses": {
+          "200": {
+            "description": "The user's organizations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No active organization, or an unmapped role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is not configured or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "workos_bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/organizations/switch": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Switches the active organization by minting a new session for it.",
+        "description": "The new token's permissions come from the new organization's membership, so\na switch cannot carry the previous organization's role across.",
+        "operationId": "switch_organization",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwitchOrganizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A session scoped to the new organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing organization id or refresh token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No active organization, or an unmapped role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The user has no membership in that organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is not configured or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "workos_bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/organizations/{organization_id}": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Reads one organization. Refuses any organization but the session's own.",
+        "operationId": "read_organization",
+        "parameters": [
+          {
+            "name": "organization_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not scoped to that organization, or lacks organization:read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is not configured or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "workos_bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/organizations/{organization_id}/memberships": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Lists the organization's memberships with each role's permissions.",
+        "operationId": "list_memberships",
+        "parameters": [
+          {
+            "name": "organization_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The memberships",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not scoped to that organization, or lacks members:read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is not configured or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "workos_bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Exchanges a refresh token for a new session.",
+        "operationId": "refresh",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A refreshed session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or blank refresh token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is not configured or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/roles": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The roles this service maps, with the permissions each grants. Static, so it\nneeds the directory for nothing.",
+        "operationId": "list_roles",
+        "responses": {
+          "200": {
+            "description": "The mapped roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The session lacks members:read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "workos_bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/session": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Reports the verified session, its organization, its role, and the\npermissions that role grants here.",
+        "operationId": "current_session",
+        "responses": {
+          "200": {
+            "description": "The verified session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentSessionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No active organization, or an unmapped role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The trust keys or the directory are unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "workos_bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/sign-in": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Starts sign-in by handing back the WorkOS-hosted authorization URL.",
+        "description": "Refuses when the directory is unconfigured, so a deployment without WorkOS\ncannot send a user to a URL it invented.",
+        "operationId": "sign_in",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The URL to redirect the browser to",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body or redirect URI",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/sign-out": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Invalidates the current WorkOS session.",
+        "description": "Takes the session id from verified claims, so a caller can only sign out the\nsession it proved it holds.",
+        "operationId": "sign_out",
+        "responses": {
+          "200": {
+            "description": "The session was invalidated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignOutResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The session has no active organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity provider is not configured or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "workos_bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/keys": {
+      "get": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "Lists this tenant's keys. Never returns a secret; revoked keys are included\nbecause their absence would look like deletion.",
+        "operationId": "list_keys",
+        "responses": {
+          "200": {
+            "description": "The tenant's keys, without secrets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired credentials"
+          },
+          "403": {
+            "description": "The account lacks the keys read scope"
+          },
+          "503": {
+            "description": "The database is not configured or unreachable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "Creates a key and returns its secret once.",
+        "description": "Refuses: a scope the calling account does not itself hold (`403`), an empty\nscope list (`400`), and a service-account principal when the caller cannot\nwrite members (`403`) — minting an organization-owned credential is an\nadministrative act, not a personal one.",
+        "operationId": "create_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created. The secret is in this body and nowhere else",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyWithSecretResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body or an empty scope list"
+          },
+          "401": {
+            "description": "Missing, malformed, or expired credentials"
+          },
+          "403": {
+            "description": "A requested scope exceeds the creating account"
+          },
+          "503": {
+            "description": "The database is not configured or unreachable"
+          }
+        }
+      }
+    },
+    "/v1/keys/{key_id}": {
+      "get": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "Reads one key's metadata. A key belonging to another tenant is `404`, not\n`403`: the tenant scoping is in the query, so this route cannot confirm that\nan id exists somewhere else.",
+        "operationId": "read_key",
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "description": "The opaque key id, prefixed key_",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The key, without its secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired credentials"
+          },
+          "403": {
+            "description": "The account lacks the keys read scope"
+          },
+          "404": {
+            "description": "No such key for this tenant"
+          },
+          "503": {
+            "description": "The database is not configured or unreachable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "Revokes a key. Idempotent: revoking an already-revoked key returns `200`\nwith the stored row, because a client retrying after a timeout must be able\nto confirm the key is dead rather than be told it never existed.",
+        "operationId": "revoke_key",
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "description": "The opaque key id, prefixed key_",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The key is revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired credentials"
+          },
+          "403": {
+            "description": "The account lacks the keys write scope"
+          },
+          "404": {
+            "description": "No such key for this tenant"
+          },
+          "503": {
+            "description": "The database is not configured or unreachable"
+          }
+        }
+      }
+    },
+    "/v1/keys/{key_id}/rotate": {
+      "post": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "Issues a new secret for an existing key and returns it once.",
+        "description": "The old secret stops working immediately. There is no overlap window, which\nmeans a rotation is a brief outage for anything still presenting the old\nvalue.\n\nponytail: no grace period. Two live secrets per key would let a deployment\nroll without downtime, and it needs a second `(hash, prefix, expires_at)`\ntriple on the row plus verification against both. Add it when a customer\nrotates a key that more than one process holds; until then, the simple\nversion is the one that cannot leave a forgotten second credential valid.\n\nRefuses to rotate a revoked key (`409`): revocation is a security decision\nand rotating past it would quietly undo it.",
+        "operationId": "rotate_key",
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "description": "The opaque key id, prefixed key_",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rotated. The new secret is in this body and nowhere else",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyWithSecretResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired credentials"
+          },
+          "403": {
+            "description": "The account lacks the keys write scope"
+          },
+          "404": {
+            "description": "No such key for this tenant"
+          },
+          "409": {
+            "description": "The key is revoked and cannot be rotated"
+          },
+          "503": {
+            "description": "The database is not configured or unreachable"
+          }
+        }
+      }
+    },
+    "/v1/members": {
+      "get": {
+        "tags": [
+          "members"
+        ],
+        "summary": "Lists the organization's members.",
+        "operationId": "list_members",
+        "responses": {
+          "200": {
+            "description": "The organization's members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired credentials"
+          },
+          "403": {
+            "description": "The account lacks the members read scope"
+          },
+          "503": {
+            "description": "The database is not configured or unreachable"
+          }
+        }
+      }
+    },
+    "/v1/members/invitations": {
+      "post": {
+        "tags": [
+          "members"
+        ],
+        "summary": "Invites someone at a role.",
+        "description": "Refuses a role above the caller's own (`403`). That is the same rule as\n[`ScopeGrant::subset_of_creator`] applied to people instead of keys: an\nadmin who can invite an owner has made themselves an owner in two steps.",
+        "operationId": "invite_member",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The invitation was created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body"
+          },
+          "401": {
+            "description": "Missing, malformed, or expired credentials"
+          },
+          "403": {
+            "description": "The account lacks the members write scope, or the role exceeds its own"
+          },
+          "503": {
+            "description": "The database is not configured or unreachable"
+          }
+        }
+      }
+    },
+    "/v1/members/{member_id}": {
+      "delete": {
+        "tags": [
+          "members"
+        ],
+        "summary": "Removes a member and revokes every key that acted as them, in one\ntransaction.",
+        "description": "Those two must commit together. A removal that commits without the\nrevocations leaves a departed person holding live credentials, which is the\nexact failure offboarding exists to prevent; a revocation that commits\nwithout the removal leaves a member who cannot work and looks like a bug.",
+        "operationId": "remove_member",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "description": "The opaque member id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The member was removed and their keys revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberRemovedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired credentials"
+          },
+          "403": {
+            "description": "The account lacks the members write scope, or the target outranks the caller"
+          },
+          "404": {
+            "description": "No such member for this tenant"
+          },
+          "409": {
+            "description": "The removal would leave the organization with no owner"
+          },
+          "503": {
+            "description": "The database is not configured or unreachable"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "members"
+        ],
+        "summary": "Changes a member's role.",
+        "description": "Refuses three things: a target role above the caller's own, acting on a\nmember who already outranks the caller, and demoting the last owner. The\nlast one is not a permission check — it is the check that stops an\norganization from locking itself out with a single `PATCH`.",
+        "operationId": "change_member_role",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "description": "The opaque member id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The member's role was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body"
+          },
+          "401": {
+            "description": "Missing, malformed, or expired credentials"
+          },
+          "403": {
+            "description": "The role exceeds the caller's own, or the target outranks the caller"
+          },
+          "404": {
+            "description": "No such member for this tenant"
+          },
+          "409": {
+            "description": "The change would leave the organization with no owner"
+          },
+          "503": {
+            "description": "The database is not configured or unreachable"
+          }
+        }
+      }
+    },
+    "/v1/quota": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "summary": "The organization's quota limits and what is left of them.",
+        "description": "This is the read side of the same snapshot [`admit_request_spend`] enforces\nagainst, so a console showing \"remaining\" and the service refusing a request\ncannot disagree about the numbers. Refuses a caller without the usage-read\nscope, and fails closed with `503` when accounting storage is unavailable.",
+        "operationId": "organization_quota",
+        "responses": {
+          "200": {
+            "description": "Quota limits and remaining allowance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "description": "The identity lacks the usage read scope"
+          },
+          "500": {
+            "description": "Unexpected internal failure"
+          },
+          "503": {
+            "description": "Accounting storage is not configured or unreachable"
+          }
+        }
+      }
+    },
+    "/v1/runs": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Lists this tenant's runs, newest first.",
+        "description": "Scoped to the verified tenant by the repository, not by a filter the client\nsupplies. Refuses an unavailable database with `503`.",
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown or malformed query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The verified identity lacks the required scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Tenant rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The durable store is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Submits a run and returns its verdict or its decision.",
+        "description": "Refuses: a body over [`MAX_BODY_BYTES`] (`413`), a missing or malformed\n`Idempotency-Key` (`400`), a verdict schema outside the bounds (`400`,\n`invalid_verdict_schema`), a decision question set outside the bounds\n(`400`, `invalid_decision_questions`), a body whose fields disagree with\nits `kind` (`400`, `invalid_body`), an input estimate over the ceiling\n(`413`), the same key with a different body (`409`), a document that never\nsatisfied the caller's schema (`503`, `verdict_schema_violation`), no\ndecision-capable route (`503`, `decision_unavailable`), an unavailable\nverdict producer, catalog, database or provider (`503`), and a deadline\nthat passed before a route was chosen (`504`).\n\nReturns only after the settlement transaction has committed.",
+        "operationId": "create_run",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Required. Replaying a key returns the stored run and never charges twice.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The verdict, validated against the caller's schema, or a stored run replayed with its verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The run is in flight and was observed from its durable state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body, a missing or invalid idempotency key, or a verdict schema outside the bounds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The verified identity lacks the required scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The same idempotency key was replayed with a different body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body exceeds the size cap, or the input exceeds the token ceiling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Tenant rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A required dependency is unavailable, or the verdict never satisfied the schema",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The deadline passed before a route was chosen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Reads one run from durable state, with its verdict when it has one.",
+        "description": "Never calls a provider, whatever the run's state: an in-flight run is\nreported, not resumed by a second call.",
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Opaque run identifier, prefixed run_",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run as durable state has it, carrying its verdict when it reached one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The run id is not a valid identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The verified identity lacks the required scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such run for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Tenant rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The durable store is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/stream": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Observes a run as `text/event-stream`.",
+        "description": "This route reads durable state and **never** performs a provider call, so\nobserving a run cannot charge for it. It emits one `state` event for the\nrun's current state and, when the run is terminal, one `terminal` event\ncarrying the digests and — for a completed run — the validated verdict,\nthen closes.\n\n# Why this is an observation stream and not a token relay\n\nIt was already not a token relay, for a reason the pivot makes stronger\nrather than weaker. **A validated verdict cannot be streamed as a verdict.**\nValidation is a property of the whole document: until the last byte has\narrived there is no document to check against the caller's schema, so any\ntoken emitted earlier is a byte this service has not proved satisfies the\ncontract it promised. Streaming those bytes under the same endpoint would\nbe a stream that lies about what it is — the client would be parsing a\ncandidate while the API's own guarantee is that it only ever returns\ndocuments that passed.\n\nThe honest shapes are the two this route already has: an observation\nstream over durable state, which is what this is, or a separate endpoint\nfor *unvalidated* candidate tokens, which would be a different product\npromise and a contract change nobody has asked for. So the verdict appears\nhere once, whole, in the terminal frame — after settlement, which is the\nsame rule `create_run` obeys.",
+        "operationId": "stream_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Opaque run identifier, prefixed run_",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent events describing the run's durable state; a completed run's terminal frame carries the whole validated verdict, never partial tokens",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "400": {
+            "description": "The run id is not a valid identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, or expired bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The verified identity lacks the required scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such run for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Tenant rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The durable store is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "summary": "An organization's usage rollup over a window.",
+        "description": "Refuses a caller without the usage-read scope, a window whose bounds are not\nUTC RFC 3339 second-precision timestamps, a window whose bounds are out of\norder, and one bound supplied without the other. Every figure is aggregated\nfrom durable accounting rows inside one transaction, so a dashboard refresh\nduring an in-flight run sees a consistent snapshot rather than a partial sum.",
+        "operationId": "organization_usage",
+        "parameters": [
+          {
+            "name": "start_at",
+            "in": "query",
+            "description": "Window start, RFC 3339 UTC",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_at",
+            "in": "query",
+            "description": "Window end, RFC 3339 UTC",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage for the organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationUsageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed window"
+          },
+          "401": {
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "description": "The identity lacks the usage read scope"
+          },
+          "500": {
+            "description": "Unexpected internal failure"
+          },
+          "503": {
+            "description": "Accounting storage is not configured or unreachable"
+          }
+        }
+      }
+    },
+    "/v1/usage/ledger": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "summary": "The spend and token ledger: one entry per provider call, newest first.",
+        "description": "Refuses the same malformed windows as the rollup, and a `limit` of zero. A\n`limit` above the documented cap is clamped, not refused. Entries come from\nthe append-only attempt table, so an entry never changes after it is\nwritten and a reconciled attempt appears as its own row.",
+        "operationId": "usage_ledger",
+        "parameters": [
+          {
+            "name": "start_at",
+            "in": "query",
+            "description": "Window start, RFC 3339 UTC",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_at",
+            "in": "query",
+            "description": "Window end, RFC 3339 UTC",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Rows to return, at most 200",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ledger entries for the organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed window or limit"
+          },
+          "401": {
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "description": "The identity lacks the usage read scope"
+          },
+          "500": {
+            "description": "Unexpected internal failure"
+          },
+          "503": {
+            "description": "Accounting storage is not configured or unreachable"
+          }
+        }
+      }
+    },
+    "/v1/usage/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "summary": "One run's usage, with the attempts that produced it.",
+        "description": "Refuses a `run_id` that is not the opaque `run_`-prefixed form. A run this\norganization does not own is `404`, the same as an unknown run: the response\nnever distinguishes \"not yours\" from \"does not exist\".",
+        "operationId": "run_usage",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Opaque run identifier, run_...",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage for one run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunUsageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed run identifier"
+          },
+          "401": {
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "description": "The identity lacks the usage read scope"
+          },
+          "404": {
+            "description": "This organization has no such run"
+          },
+          "500": {
+            "description": "Unexpected internal failure"
+          },
+          "503": {
+            "description": "Accounting storage is not configured or unreachable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiErrorBody": {
+        "type": "object",
+        "description": "The fixed error envelope from `docs/CONVENTIONS.md` section 2.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ApiErrorDetail"
+          }
+        }
+      },
+      "ApiErrorDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable snake_case identifier a client may branch on."
+          },
+          "message": {
+            "type": "string",
+            "description": "For humans. Never assembled from provider output."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Always present so a report can be traced."
+          },
+          "retryable": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Present only on a quota refusal, where whether waiting can help is the\none thing the client needs beyond the code. Absent everywhere else, so\nthe envelope every other route emits is exactly the documented three\nfields."
+          }
+        }
+      },
+      "CallbackRequest": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/SessionToken",
+            "description": "The one-time authorization code from the WorkOS redirect."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CapabilityHint": {
+        "type": "string",
+        "description": "The capability vocabulary a caller may hint with.\n\nA wire mirror of `opentype_catalog::Capability` rather than a re-export:\n`opentype-catalog` is a domain crate and does not derive `ToSchema`, and\n`docs/CONVENTIONS.md` section 1 says a type needed by the edge does not\ntravel *into* a lower crate to get there. The mapping below is exhaustive,\nso adding a catalog capability fails to compile here until the wire\nvocabulary and the OpenAPI document are updated with it — which is what a\ncontract change should feel like.",
+        "enum": [
+          "chat",
+          "reasoning",
+          "tools",
+          "vision",
+          "streaming",
+          "embedding",
+          "structured_read"
+        ]
+      },
+      "ChangeRoleRequest": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CostBasis": {
+        "type": "string",
+        "description": "Where the `cost_micros` figure beside a verdict came from.\n\nThis field exists because the honest answer is not always the same one, and\npresenting an estimate as a measurement is the defect it closes. A provider\nthat reports its own billable usage gives us `provider_reported`; a provider\nthat reports nothing leaves the catalog's price arithmetic as the only\nfigure there is, and that is `estimated` — named, rather than passed off as\nwhat the call cost.\n\nA caller reconciling an invoice needs this distinction: summing `estimated`\nrows against a provider statement will not balance, and a field that did\nnot say so would make that look like our accounting error rather than the\nabsence of a provider figure.",
+        "enum": [
+          "provider_reported",
+          "estimated"
+        ]
+      },
+      "CreateInvitationRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role",
+            "description": "Must be a role this service maps, checked before WorkOS is called so an\ninvitation cannot be created for a role that would grant nothing."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateKeyRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human label shown in the console. Not a credential and not unique."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            },
+            "description": "Requested scopes. Refused with `403` if the creating account does not\nhold every one of them."
+          },
+          "principal": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KeyPrincipal",
+                "description": "Which identity the key acts as. Omitted means the calling user, which is\nthe console's default for a personal key."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateRunRequest": {
+        "type": "object",
+        "description": "A run submission.\n\nThere is no `model` field and no `provider` field. Model ids are catalog\ndata and the route is the router's decision; an arbitrary client-supplied\nmodel id has nowhere to arrive. `capability_hint` is the one thing a caller\nmay say about routing, and it is drawn from a closed vocabulary rather than\nfree text — see [`CreateRunRequest::capability_hint`].\n\n# Why this is one flat struct and not two, or an enum\n\nA run is a verdict or a decision, and the valid field set depends on which.\nThat is strictly worse to read than two structs, and it is what the\ncompatibility guarantee costs. Spelling it as a serde internally-tagged\nenum — the obvious answer — is refused on measured evidence: `#[serde(tag =\n\"kind\")]` makes the tag **required**, so every caller written against the\ncommitted `openapi.json`, where `CreateRunRequest.required` is\n`[\"messages\", \"schema\", \"max_output_tokens\"]` and no `kind` exists, would\nstart failing at `400`. A contract that breaks every existing client to add\na variant is a versioning event, not an addition.\n\nSo: a flat struct, `deny_unknown_fields` kept, an optional defaulted\ndiscriminant, and cross-field validation at admission. The \"wrong field for\nthis kind\" message moves from serde to us, where it is a `400` with a\nstable code — which is what a client can branch on anyway.\n\n`schema` moves from required to optional **in the struct only**. It stays\nrequired *for a verdict*, enforced by [`admit_contract`], so no verdict\ncaller's observable contract changes. `openapi.json` carries that in prose,\nbecause `required` cannot express it.",
+        "required": [
+          "max_output_tokens"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/RunKind",
+            "description": "Which kind of answer this run produces. Absent means\n[`RunKind::Verdict`], which is what every request written before\ndecisions existed means."
+          },
+          "system": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunMessage"
+            },
+            "description": "The prompt turns. Required for a verdict; forbidden for a decision,\nwhose input is `state`."
+          },
+          "schema": {
+            "description": "The JSON Schema the verdict must satisfy. Required **for a verdict**: a\nverdict run with no schema has no verdict to produce, and prose is not\na product here. Forbidden for a decision.\n\nBounded and compiled at admission before a run row exists. A schema\noutside the bounds is `400` with code `invalid_verdict_schema` and\nnothing is created, nothing reserved, no provider called."
+          },
+          "state": {
+            "description": "The thing being decided about. Any JSON; an object is first-class.\nRequired for a decision, forbidden for a verdict."
+          },
+          "instructions": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Schema-level context, the decision path's analogue of `system`."
+          },
+          "questions": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The questions, keyed by the caller's own ids. Required for a decision.\n\nA `BTreeMap` on the wire, which is what JSON gives us, plus\n[`CreateRunRequest::question_order`] to recover the caller's own order\n— see that field for why the order matters and cannot be inferred.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DecisionQuestionRequest"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "draws": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many independent noise draws to average, `1..=8`, default 1.\n\nA fixed integer only. The companion server also accepts `\"auto\"`, which\ntakes one read and then decides whether to take more based on what that\nread looked like — making the provider choose the spend. Every\naccounting rule here points the other way (`charge_verdict_attempt`:\n\"never from anything a provider returned\"), so `\"auto\"` is refused\nrather than approximated.\n\nDraws multiply cost. They are worth paying for when you threshold the\nprobability and the value lands near the threshold; not worth it when\nyou consume the argmax and never compare the number to anything.",
+            "minimum": 0
+          },
+          "think_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Thought tokens the read may generate first, `0..=4096`, default 0. A\nreal quality knob with a legible price: they are generated tokens.",
+            "minimum": 0
+          },
+          "capability_hint": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityHint"
+            },
+            "description": "Optional routing hint from the closed [`CapabilityHint`] vocabulary.\n\n**Additive only.** It can narrow the candidate set; it can never widen\na ceiling, extend a deadline, or make an ineligible candidate eligible.\nA caller who needs a vision-capable or reasoning-capable model says so\nhere; the schema cannot tell us that."
+          },
+          "max_output_tokens": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Output tokens this run may generate. Priced separately from input, so it\nis part of the spend estimate rather than a hint.",
+            "minimum": 0
+          },
+          "deadline_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Time budget in milliseconds. Clamped to [`MAX_DEADLINE_MS`]; absent\nmeans [`DEFAULT_DEADLINE_MS`].",
+            "minimum": 0
+          },
+          "question_order": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The caller's own question order, when it matters to them.\n\nJSON objects have no order a `BTreeMap` preserves, and the question\norder **is** the row order of the answer template the provider builds.\nAbsent means \"the sorted order is fine\"; present, it must name exactly\nthe keys of `questions`, and the questions are sent in that order.\n\nA separate field rather than a silent guess, because the alternative is\nworse in both directions: sorting silently reorders a template the\ncaller wrote, and there is no way to recover an original order a\n`BTreeMap` already discarded. Forbidden for a verdict."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CurrentSessionResponse": {
+        "type": "object",
+        "description": "The current session as the console reads it. No token is echoed here: the\ncaller already holds its own bearer, and returning it would put a credential\nin a `GET` response for no reason.",
+        "required": [
+          "user_id",
+          "organization_id",
+          "role",
+          "permissions"
+        ],
+        "properties": {
+          "user_id": {
+            "type": "string"
+          },
+          "organization_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            }
+          }
+        }
+      },
+      "DecisionQuestionRequest": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SharedQuestionFields"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "instructions"
+                ],
+                "properties": {
+                  "instructions": {
+                    "type": "string"
+                  },
+                  "criteria": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/components/schemas/NoulCriteria",
+                        "description": "Optional descriptions of what each side means."
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "description": "A yes/no question. The answer is P(yes).",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "noul"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A yes/no question. The answer is P(yes)."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SharedQuestionFields"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "instructions",
+                  "criteria"
+                ],
+                "properties": {
+                  "instructions": {
+                    "type": "string"
+                  },
+                  "criteria": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "description": "A closed option set: option name to an optional description. The name\nis what an answer and an `ask_if` compare against.",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "choice"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A closed option set: option name to an optional description. The name\nis what an answer and an `ask_if` compare against."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SharedQuestionFields"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "instructions",
+                  "criteria"
+                ],
+                "properties": {
+                  "instructions": {
+                    "type": "string"
+                  },
+                  "criteria": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "description": "An ordered set of levels. The order is the level order, and the index\nis the meaningful key of the answer.",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "score"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "An ordered set of levels. The order is the level order, and the index\nis the meaningful key of the answer."
+          }
+        ],
+        "description": "One question of a decision, discriminated on `type`.\n\nInternally tagged, unlike [`CreateRunRequest`]'s own `kind`, and the\nasymmetry is deliberate: `type` has always been required on a question —\nthere is no legacy caller to break — and this is exactly the case an\ninternally-tagged enum is for, three variants whose `criteria` means three\ndifferent things. The companion server's `jev_schema` validates precisely\nthis, per type."
+      },
+      "DecisionReadResponse": {
+        "type": "string",
+        "description": "What constrained a decision's answers.\n\nThe decision path's [`SchemaEnforcementResponse`], and it answers the same\nquestion: was the answer provider-enforced or reconstructed? A separate\nvocabulary rather than two more enforcement variants, because a caller\nreading `enforced` on a decision would reasonably think a schema had been\nchecked, and none was.",
+        "enum": [
+          "slot_constrained",
+          "reconstructed"
+        ]
+      },
+      "DecisionResponse": {
+        "type": "object",
+        "description": "One question's answer set, as a client sees it.\n\nA decision's answers are the response, the way a verdict's document is.\n`answers` is keyed by the caller's own question ids and each value is\ndiscriminated on `type`, so a caller reads the shape that matches the\nquestion they asked.\n\nThe per-answer shapes are documented on the wire rather than here, because\nthey come from the provider's own vocabulary; the ones worth knowing before\nreading a number:\n\n- a `noul` answer's `probability` is **P(yes)**, not \"the probability of\n  the answer\", and carries no confidence — with two labels confidence\n  would be `max(p, 1 - p)`, a field a caller can compute and that could\n  therefore disagree with itself;\n- a `score` is **0-indexed** with a `legend`, and its `probabilities` are\n  keyed by legend index while a `choice`'s are keyed by option name. That\n  asymmetry is inherited from the surface whose vocabulary this adopted,\n  and it is kept and documented rather than smoothed over: a score's\n  levels are ordered, so the index *is* the meaningful key;\n- `label_mass` and `answered_within_labels`, where present, are the\n  honesty rule applied to a probability. When `answered_within_labels` is\n  false the reported probabilities are a renormalisation over labels the\n  model did not favour at all, and a confident-looking `0.71` with no way\n  to see that is exactly the defect this product exists not to commit;\n- a skipped question is `{\"type\": \"skipped\", \"because\": {...}}` rather than\n  a null, because here the null *is* meaningful and the meaning belongs in\n  the value rather than in a side-channel to join against.\n\n**No `stderr` or `agreement` field exists, at any draw count.** The\nupstream surface computes both and then drops them before they reach the\nwire, so this service has nothing to report — and reporting a zero, or\nreconstructing a standard error from a single reported mean, would be a\nclaim of precision from data that never arrived. See\n`opentype_provider::decision_read::DecisionOutcome::draw_statistics_are_available`.",
+        "required": [
+          "answers",
+          "draws",
+          "read"
+        ],
+        "properties": {
+          "answers": {
+            "description": "One answer per question, keyed by the caller's own question ids.\n\nTyped as raw JSON because the per-answer shape is discriminated on\n`type` and differs per question type; the values are not provider text\nbut numbers this service decoded field by field through\n`opentype_provider::decision_read::DecisionAnswer`, with every\nprobability range-checked."
+          },
+          "draws": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many independent noise draws were averaged.",
+            "minimum": 0
+          },
+          "read": {
+            "$ref": "#/components/schemas/DecisionReadResponse",
+            "description": "What constrained the answers."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The catalog model id that served the read.\n\nReturned, unlike on a verdict, because a probability without the model\nthat produced it is not reproducible and not comparable across runs."
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "The stage schedule the read actually ran in: question ids per stage,\neach stage after the stages of everything its questions depend on."
+          },
+          "thought_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Thought tokens generated before the read, when the caller funded any.\n\nThe thought **text** is never returned. It is raw provider prose, and\n`docs/CONVENTIONS.md` section 7 forbids populating a response field\nfrom a raw provider payload. The count and the closed flag are facts\nabout the read; the prose is a payload nobody validated or promised.",
+            "minimum": 0
+          },
+          "thought_closed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "The fixed error envelope from `docs/CONVENTIONS.md` section 2.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        }
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable snake_case identifier a client may branch on."
+          },
+          "message": {
+            "type": "string",
+            "description": "For humans. Never assembled from provider output."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Always present so a report can be traced."
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "service"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
+      "InvitationListResponse": {
+        "type": "object",
+        "required": [
+          "invitations"
+        ],
+        "properties": {
+          "invitations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvitationResponse"
+            }
+          }
+        }
+      },
+      "InvitationResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "organization_id",
+          "role",
+          "state",
+          "expires_at",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "organization_id": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "state": {
+            "$ref": "#/components/schemas/InvitationState"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      },
+      "InvitationState": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "accepted",
+          "expired",
+          "revoked"
+        ]
+      },
+      "InviteMemberRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole"
+          }
+        },
+        "additionalProperties": false
+      },
+      "KeyListResponse": {
+        "type": "object",
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyResponse"
+            }
+          }
+        }
+      },
+      "KeyPrincipal": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A human member. The value is the WorkOS user identifier.",
+            "required": [
+              "id",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "A human member. The value is the WorkOS user identifier."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A machine identity owned by the organization.",
+            "required": [
+              "id",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "A machine identity owned by the organization."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "service_account"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Who a key acts as.\n\nThe service-account model in one type. A key issued to a `User` dies with\nthat user's membership: remove the member and their keys are revoked in the\nsame transaction, because a credential that outlives the human who owns it\nis how an offboarded contractor keeps production access. A key issued to a\n`ServiceAccount` is owned by the organization, survives the person who\ncreated it, and is what a deployment should actually use — which is why\ncreation records `created_by` separately from the principal."
+      },
+      "KeyResponse": {
+        "type": "object",
+        "description": "A key without its secret. Every read path returns this shape.",
+        "required": [
+          "id",
+          "name",
+          "principal",
+          "scopes",
+          "state",
+          "secret_prefix",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/KeyPrincipal"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/KeyState"
+          },
+          "secret_prefix": {
+            "type": "string",
+            "description": "The visible fragment, e.g. `otsk_a1b2c3d4`. Never the whole secret."
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "KeyState": {
+        "type": "string",
+        "description": "Lifecycle of a key. A revoked key is never deleted: the row is the audit\ntrail for everything the key did, and deleting it would orphan those\nrecords.",
+        "enum": [
+          "active",
+          "revoked"
+        ]
+      },
+      "KeyWithSecretResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/KeyResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "secret"
+            ],
+            "properties": {
+              "secret": {
+                "type": "string",
+                "description": "The plaintext secret. Shown once. The service stores only its SHA-256\nand cannot return this value again; a lost secret is rotated, not\nrecovered."
+              }
+            }
+          }
+        ],
+        "description": "The only response in the API that carries a secret, and the only one that\never will. Returned by create and rotate; a second `GET` on the same key\nreturns [`KeyResponse`], with no secret, forever."
+      },
+      "LedgerEntryBody": {
+        "type": "object",
+        "description": "One ledger row on the wire.",
+        "required": [
+          "run_id",
+          "retry_ordinal",
+          "provider",
+          "model_id",
+          "status",
+          "tokens",
+          "cost_micros",
+          "created_at"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "retry_ordinal": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "provider_request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenTotalsBody"
+          },
+          "cost_micros": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      },
+      "LedgerParams": {
+        "type": "object",
+        "description": "`GET /v1/usage/ledger` parameters: a window plus a row cap.",
+        "properties": {
+          "start_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "LedgerResponse": {
+        "type": "object",
+        "description": "`GET /v1/usage/ledger`.",
+        "required": [
+          "organization_id",
+          "window",
+          "limit",
+          "entries"
+        ],
+        "properties": {
+          "organization_id": {
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/UsageWindowBody"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerEntryBody"
+            }
+          }
+        }
+      },
+      "MemberListResponse": {
+        "type": "object",
+        "required": [
+          "members"
+        ],
+        "properties": {
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemberResponse"
+            }
+          }
+        }
+      },
+      "MemberRemovedResponse": {
+        "type": "object",
+        "description": "What removing a member actually did. The key count is here because the\ndestructive part of removal is invisible otherwise.",
+        "required": [
+          "id",
+          "revoked_key_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "revoked_key_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "MemberResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "role",
+          "state",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole"
+          },
+          "state": {
+            "$ref": "#/components/schemas/MemberState"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      },
+      "MemberState": {
+        "type": "string",
+        "enum": [
+          "invited",
+          "active"
+        ]
+      },
+      "MembershipListResponse": {
+        "type": "object",
+        "required": [
+          "memberships"
+        ],
+        "properties": {
+          "memberships": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MembershipResponse"
+            }
+          }
+        }
+      },
+      "MembershipResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "user_id",
+          "organization_id",
+          "role",
+          "status",
+          "permissions",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "organization_id": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MembershipStatus"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "description": "The permissions this membership's role grants in this service. Reported\nso the console can hide actions it would be refused, without hardcoding\nthe mapping in TypeScript."
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      },
+      "MembershipStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "inactive",
+          "pending"
+        ]
+      },
+      "MessageRole": {
+        "type": "string",
+        "enum": [
+          "user",
+          "assistant"
+        ]
+      },
+      "NoulCriteria": {
+        "type": "object",
+        "description": "What a `noul` question's two sides mean.",
+        "properties": {
+          "true": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "false": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrganizationListResponse": {
+        "type": "object",
+        "required": [
+          "organizations"
+        ],
+        "properties": {
+          "organizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrganizationResponse"
+            }
+          }
+        }
+      },
+      "OrganizationResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        }
+      },
+      "OrganizationRole": {
+        "type": "string",
+        "description": "Organization roles, ordered: every role is at least as privileged as the one\nbelow it. The ordering is the whole point — [`Role::outranks_or_equals`] is\nwhat stops a member from promoting themselves.\n\n`ServiceAccount` is deliberately *not* a role. A service account is a\nprincipal that holds keys; its permissions are the scopes on those keys, and\nthose scopes were bounded by a human's role at creation time. Giving a\nservice account a role of its own would create a second ladder to climb.\n\nNamed `OrganizationRole` in the OpenAPI document. `api/auth.rs` also has a\n`Role`, and that one is an open WorkOS slug string rather than this closed\nladder; `components(schemas(...))` keys on the type name, so without this\nthe two would share one schema and a client would be handed whichever\ndefinition was registered last.",
+        "enum": [
+          "member",
+          "admin",
+          "owner"
+        ]
+      },
+      "OrganizationUsageResponse": {
+        "type": "object",
+        "description": "`GET /v1/usage`.",
+        "required": [
+          "organization_id",
+          "window",
+          "runs",
+          "tokens",
+          "spend"
+        ],
+        "properties": {
+          "organization_id": {
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/UsageWindowBody"
+          },
+          "runs": {
+            "$ref": "#/components/schemas/RunCountsBody"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenTotalsBody"
+          },
+          "spend": {
+            "$ref": "#/components/schemas/SpendTotalsBody"
+          }
+        }
+      },
+      "Permission": {
+        "type": "string",
+        "description": "An application permission. This is the vocabulary a route demands; a WorkOS\nrole is only ever an input to [`Role::permissions`].\n\nAdding a variant is a contract change: it is a lowercase snake_case string on\nthe wire and needs a re-emitted `openapi.json`.",
+        "enum": [
+          "runs_read",
+          "runs_write",
+          "organization_read",
+          "organization_write",
+          "members_read",
+          "members_write",
+          "billing_read",
+          "billing_write"
+        ]
+      },
+      "QuotaLimitsBody": {
+        "type": "object",
+        "description": "The limits half of `GET /v1/quota`. A null limit is \"no organization-level\nlimit is configured\"; `request_spend_ceiling_micros` is never null.",
+        "required": [
+          "request_spend_ceiling_micros"
+        ],
+        "properties": {
+          "period_spend_limit_micros": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "period_token_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "request_spend_ceiling_micros": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The effective per-request provider spend ceiling after the\narchitecture's ceiling, configuration, and the organization's own row\nhave all been applied. An over-estimate request is refused with `429`.",
+            "minimum": 0
+          }
+        }
+      },
+      "QuotaResponse": {
+        "type": "object",
+        "description": "`GET /v1/quota`.",
+        "required": [
+          "organization_id",
+          "period",
+          "limits",
+          "consumed_tokens",
+          "consumed_spend"
+        ],
+        "properties": {
+          "organization_id": {
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/UsageWindowBody"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/QuotaLimitsBody"
+          },
+          "consumed_tokens": {
+            "$ref": "#/components/schemas/TokenTotalsBody"
+          },
+          "consumed_spend": {
+            "$ref": "#/components/schemas/SpendTotalsBody"
+          },
+          "remaining_spend_micros": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Null when the matching limit is not configured.",
+            "minimum": 0
+          },
+          "remaining_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "properties": {
+          "refresh_token": {
+            "$ref": "#/components/schemas/SessionToken"
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Switch the active organization while refreshing. This is how an\norganization switch is performed: a new access token is minted with the\nnew `org_id`, so permissions are re-derived from the new membership\nrather than carried over."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Role": {
+        "type": "string",
+        "description": "A WorkOS role slug as it appears on an organization membership.\n\nRoles are configured in WorkOS, so this is an opaque string rather than an\nenum: a role the deployment has not mapped must not become a compile error\nin a running service, it must become *no permissions*."
+      },
+      "RoleDescription": {
+        "type": "object",
+        "required": [
+          "role",
+          "permissions"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            }
+          }
+        }
+      },
+      "RoleListResponse": {
+        "type": "object",
+        "description": "The role catalog, so a client can populate an invitation form without\nguessing which slugs this service maps.",
+        "required": [
+          "roles"
+        ],
+        "properties": {
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleDescription"
+            }
+          }
+        }
+      },
+      "RunCounts": {
+        "type": "object",
+        "description": "Run counts by terminal state, for the dashboard header.",
+        "required": [
+          "total",
+          "completed",
+          "failed",
+          "in_flight"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "completed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "in_flight": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Admitted and not yet terminal. Their reservations are held, not settled.",
+            "minimum": 0
+          }
+        }
+      },
+      "RunCountsBody": {
+        "type": "object",
+        "required": [
+          "total",
+          "completed",
+          "failed",
+          "in_flight"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "completed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "in_flight": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "RunKind": {
+        "type": "string",
+        "description": "Which kind of answer a run produces.\n\n`docs/DECISIONS-decision-runs.md` section 4, in one sentence: a verdict\nasks the model to write a document and then checks the document; a decision\nasks the model for its distribution over a closed answer set it was never\nable to leave.\n\nThe corollary, which is why both exist: a verdict can express anything a\nJSON Schema can and gives you no calibration; a decision can express only\nyes/no, a closed option set, or an ordered level, and gives you a number\nyou can threshold.",
+        "enum": [
+          "verdict",
+          "decision"
+        ]
+      },
+      "RunListResponse": {
+        "type": "object",
+        "description": "A page of runs. `Eq` is absent because a [`RunResponse`] may carry a\nverdict, and `serde_json::Value` holds floats, for which equality is\npartial. `PartialEq` is what a test needs and it is what the data supports.",
+        "required": [
+          "runs",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunResponse"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "description": "What was asked for after clamping, so a client can tell that its\noversized `limit` was tightened rather than honoured.",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "RunMessage": {
+        "type": "object",
+        "description": "One turn of the prompt. Deliberately minimal: a client cannot express a\nprovider-specific parameter here, so nothing can be smuggled through to an\nadapter.",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/MessageRole"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RunResponse": {
+        "type": "object",
+        "description": "A run as a client sees it.\n\n`verdict` is the point of the response: the document the model produced and\nthis service validated against the caller's own schema. It is absent, never\nnull-and-meaningless, on a run that has not produced one — an in-flight run,\na failed run, or a listing row read without its verdict. A caller that sees\n`state: \"completed\"` and no `verdict` is looking at a listing, not at a\nfinished submission.\n\n`usage` and `cost_micros` are optional for the same reason: they are only\nknowable from durable state, and a zero would be a false statement about\nwhat the run cost rather than an admission that this response does not know.",
+        "required": [
+          "run_id",
+          "kind",
+          "state",
+          "input_digest",
+          "replayed"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "description": "Opaque, prefixed `run_...`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RunKind",
+            "description": "Which kind of answer this run produces, so a reader knows whether to\nlook at `verdict` or at `decision`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunStateResponse"
+          },
+          "input_digest": {
+            "type": "string",
+            "description": "Hex SHA-256 of the normalized input, which covers the caller's schema.\nThe input itself is not stored."
+          },
+          "output_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict": {
+            "description": "The validated verdict. Returned only after it satisfied the caller's\nschema and only after settlement is durable.\n\nA completed run carries this **or** [`Self::decision`], never both and\nnever neither. The invariant is not expressible in this flat struct and\nis held by the handler and by the two tables' own constraints; `kind`\nsays which to expect."
+          },
+          "decision": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DecisionResponse",
+                "description": "The decision's answer set. Returned only after settlement is durable,\non the same terms as [`Self::verdict`]."
+              }
+            ]
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UsageResponse"
+              }
+            ]
+          },
+          "cost_micros": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "cost_basis": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CostBasis",
+                "description": "Whether `cost_micros` is a provider-reported figure or this service's\nown estimate. Present exactly when `cost_micros` is, because a cost with\nno stated basis is the defect this field closes."
+              }
+            ]
+          },
+          "schema_enforcement": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SchemaEnforcementResponse",
+                "description": "What constrained the verdict: the provider's own schema enforcement, or\nnothing but this service's validation. Present on a response that\ncarries a verdict produced by a call made for this request.\n\nAbsent on a replay and on a listing row. That is not an oversight: the\nvalue is a property of the wire exchange, and `run_verdicts` stores the\ndocument and its cost, not the enforcement the adapter observed. An\ninvented value here would be worse than its absence — see\n[`replayed_with_verdict`]."
+              }
+            ]
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "True when this response came from storage rather than from a provider\ncall made for this request. A replayed idempotency key is never a second\ncharge."
+          }
+        }
+      },
+      "RunStateResponse": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "failed"
+        ]
+      },
+      "RunUsageResponse": {
+        "type": "object",
+        "description": "`GET /v1/usage/runs/{run_id}`.",
+        "required": [
+          "run_id",
+          "organization_id",
+          "state",
+          "created_at",
+          "tokens",
+          "spend",
+          "ceiling_micros",
+          "attempts"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "organization_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenTotalsBody"
+          },
+          "spend": {
+            "$ref": "#/components/schemas/SpendTotalsBody"
+          },
+          "ceiling_micros": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "attempts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerEntryBody"
+            }
+          }
+        }
+      },
+      "RunsErrorBody": {
+        "type": "object",
+        "description": "The error body shape from `docs/CONVENTIONS.md` section 2. `message` is for\nhumans and is never assembled from provider output.\n\nNamed `RunsErrorBody` in the OpenAPI document: `api/auth.rs` declares its\nown `ErrorBody` of the same shape, and `components(schemas(...))` keys on\nthe type name, so one of the two would otherwise silently stand for both.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/RunsErrorDetail"
+          }
+        }
+      },
+      "RunsErrorDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable snake_case identifier clients may branch on."
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "JSON Pointer paths naming where the model's document failed the\ncaller's schema, at most [`opentype_neo::MAX_REPORTED_POINTERS`] of\nthem. Present only on `verdict_schema_violation`.\n\nThese are derived from the caller's own schema and the caller's own\ndocument, never from provider text, so this does not breach the rule\nthat an error body is never assembled from provider output. It is the\ndifference between \"it failed\" and \"your `/risk/score` came back as a\nstring\"."
+          }
+        }
+      },
+      "SchemaEnforcementResponse": {
+        "type": "string",
+        "description": "What actually constrained the answer this run returned.\n\nA wire mirror of [`opentype_provider::SchemaEnforcement`] rather than a\nre-export, for the same reason [`CapabilityHint`] mirrors\n`opentype_catalog::Capability`: `opentype-provider` is a domain crate and\ndoes not derive `ToSchema`, and `docs/CONVENTIONS.md` section 1 says a type\nthe edge needs does not travel *into* a lower crate to get there. The\nmapping below is exhaustive, so a new provider-side variant fails to\ncompile here until the wire vocabulary and the OpenAPI document carry it.\n\nThis is the visible half of the fact that the provider families are **not**\nuniform, and it is why the value reaches a client at all. Without it an\nanswer a provider guaranteed and an answer we merely asked for and then\nvalidated ourselves are indistinguishable. What each value means to a\ncaller, and specifically what a *future* validation failure against the\nsame model would mean:\n\n| Value | What bound the answer | A validation failure would be |\n| --- | --- | --- |\n| `unconstrained` | Nothing: no schema travelled, or the family could only ask and the model answered outside the schema slot anyway. | Expected. This service's own validation was the only check. |\n| `requested` | The schema went in the family's slot and the model was invited to use it; the family cannot compel it. | Expected. The model was free to ignore the schema. |\n| `forced` | The model was compelled into the schema slot, but the provider did not itself check the arguments against the schema. | Possible. The shape was asked for, not verified upstream. |\n| `enforced` | The provider constrained decoding to the schema. | A provider defect worth reporting upstream, not an expected outcome. |\n\nEvery verdict this service returns has passed validation regardless of the\nvalue here — the guarantee is unconditional. What the value adds is whether\nthat guarantee rested on the provider or on us.",
+        "enum": [
+          "unconstrained",
+          "requested",
+          "forced",
+          "enforced"
+        ]
+      },
+      "Scope": {
+        "type": "string",
+        "description": "One capability a token may authorize.\n\nThis is the vocabulary every route demands, and it is disjoint from\n`api::admin`'s operator permission namespace on purpose: no tenant scope can\nname an operator capability, so no tenant token can reach the operator\nsurface.\n\nAdding a variant is a contract change: it is a lowercase snake_case string\non the wire and needs a re-emitted `openapi.json`.",
+        "enum": [
+          "runs_read",
+          "runs_write",
+          "keys_read",
+          "keys_write",
+          "members_read",
+          "members_write",
+          "billing_write",
+          "usage_read"
+        ]
+      },
+      "SessionResponse": {
+        "type": "object",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "user_id",
+          "expires_in_seconds"
+        ],
+        "properties": {
+          "access_token": {
+            "$ref": "#/components/schemas/SessionToken"
+          },
+          "refresh_token": {
+            "$ref": "#/components/schemas/SessionToken"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_in_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SessionToken": {
+        "type": "string",
+        "format": "password",
+        "description": "A session token in transit — an authorization code, a refresh token, or an\naccess token being handed to the caller that owns the session.\n\nIt exists so that a token can cross this boundary without ever becoming\nloggable: `Debug` is redacted, and the value is reachable only through\n[`SessionToken::expose`] at the moment an outbound WorkOS request is built.\nUnlike the configuration `Secret`, this one is `Deserialize`/`Serialize`,\nbecause the sign-in exchange is exactly the place where a token is a\nrequest field and a response field. It is never written to a database, never\nplaced in an error variant, and never put in a tracing field."
+      },
+      "SharedQuestionFields": {
+        "type": "object",
+        "description": "The fields every question type shares.\n\nFlattened into each variant rather than repeated, so a field added here\ncannot reach two of the three types and miss the third.",
+        "properties": {
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Other questions in this set whose answers this question's stage must\ncome after. Stages are the caller's own logic and cannot be emulated\nclient-side without paying for two runs."
+          },
+          "ask_if": {
+            "type": "object",
+            "description": "Question id to the answer names that make this question worth asking.\nA question whose condition fails is `skipped` rather than answered.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "alone": {
+            "type": "boolean",
+            "description": "Whether this question must be read on its own rather than jointly with\nits stage. A one-bit escape hatch that is impossible to reconstruct\nclient-side."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignInRequest": {
+        "type": "object",
+        "required": [
+          "redirect_uri"
+        ],
+        "properties": {
+          "redirect_uri": {
+            "type": "string",
+            "description": "Where WorkOS returns the browser after sign-in."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque CSRF state the client will compare on return."
+          },
+          "organization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sign straight into one organization instead of letting the user pick."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignInResponse": {
+        "type": "object",
+        "required": [
+          "authorization_url"
+        ],
+        "properties": {
+          "authorization_url": {
+            "type": "string",
+            "description": "The WorkOS-hosted URL to redirect the browser to."
+          }
+        }
+      },
+      "SignOutResponse": {
+        "type": "object",
+        "required": [
+          "signed_out"
+        ],
+        "properties": {
+          "signed_out": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SpendTotals": {
+        "type": "object",
+        "description": "Spend totals in micro-USD, from `budget_reservations` and\n`provider_attempts`.",
+        "required": [
+          "reserved_micros",
+          "settled_micros"
+        ],
+        "properties": {
+          "reserved_micros": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Held against a ceiling, whether or not it has settled yet.",
+            "minimum": 0
+          },
+          "settled_micros": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Settled against real provider usage.",
+            "minimum": 0
+          }
+        }
+      },
+      "SpendTotalsBody": {
+        "type": "object",
+        "required": [
+          "reserved_micros",
+          "settled_micros",
+          "unsettled_micros"
+        ],
+        "properties": {
+          "reserved_micros": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "settled_micros": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unsettled_micros": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Reserved and not yet settled: in-flight runs and attempts awaiting\nreconciliation.",
+            "minimum": 0
+          }
+        }
+      },
+      "SwitchOrganizationRequest": {
+        "type": "object",
+        "required": [
+          "organization_id",
+          "refresh_token"
+        ],
+        "properties": {
+          "organization_id": {
+            "type": "string"
+          },
+          "refresh_token": {
+            "$ref": "#/components/schemas/SessionToken",
+            "description": "Required: switching mints a new access token, which needs the refresh\ntoken. Re-signing the current token would let a revoked membership keep\nits permissions until expiry."
+          }
+        },
+        "additionalProperties": false
+      },
+      "TokenTotals": {
+        "type": "object",
+        "description": "Token totals, summed over settled attempts.",
+        "required": [
+          "input_tokens",
+          "output_tokens"
+        ],
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TokenTotalsBody": {
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "total_tokens"
+        ],
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "UsageResponse": {
+        "type": "object",
+        "description": "Token usage as it was settled. Never estimated when the provider reported\nit.",
+        "required": [
+          "input_tokens",
+          "output_tokens"
+        ],
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "UsageWindowBody": {
+        "type": "object",
+        "required": [
+          "start_at",
+          "end_at"
+        ],
+        "properties": {
+          "start_at": {
+            "type": "string"
+          },
+          "end_at": {
+            "type": "string"
+          }
+        }
+      },
+      "UsageWindowParams": {
+        "type": "object",
+        "description": "The window every read accepts. Both bounds are optional and must be given\ntogether; omitting them reads the organization's current quota period.",
+        "properties": {
+          "start_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

@@ -1,0 +1,144 @@
+---
+title: "Quickstart"
+description: "Create an API key in the console and send your first decision run."
+---
+
+<Steps>
+  <Step title="Create an API key">
+    Open the [console](https://console.opentype.dev/keys), go to **API keys**, and create a key with the `runs_write` and `runs_read` scopes.
+
+    The secret looks like `otsk_` followed by 64 hex characters. The console shows it **once**; only a hash is stored, so copy it now.
+  </Step>
+  <Step title="Export it">
+    ```bash
+    export OPENTYPE_API_KEY="otsk_..."
+    ```
+  </Step>
+  <Step title="Send a decision run">
+    This run triages a support ticket with two questions: a yes/no (`noul`) and a one-of-N (`choice`).
+
+    <CodeGroup>
+
+    ```bash cURL
+    curl -sS https://api.opentype.dev/v1/runs \
+      -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+      -H "Content-Type: application/json" \
+      -H "Idempotency-Key: $(uuidgen)" \
+      -d '{
+        "kind": "decision",
+        "state": {"subject": "Charged twice for March", "body": "My card was charged twice. Refund today or I dispute it."},
+        "instructions": "You triage inbound support tickets for a SaaS billing team.",
+        "questions": {
+          "urgent": {"type": "noul", "instructions": "Does this need a human reply within one hour?"},
+          "queue": {"type": "choice", "instructions": "Which queue owns this ticket?",
+                    "criteria": {"billing": "charges, refunds, invoices", "technical": "bugs, errors", "other": null}}
+        },
+        "max_output_tokens": 64
+      }'
+    ```
+
+    ```ts TypeScript
+    const res = await fetch("https://api.opentype.dev/v1/runs", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(), // reuse the same key if you retry this request
+      },
+      body: JSON.stringify({
+        kind: "decision",
+        state: { subject: "Charged twice for March", body: "My card was charged twice. Refund today or I dispute it." },
+        instructions: "You triage inbound support tickets for a SaaS billing team.",
+        questions: {
+          urgent: { type: "noul", instructions: "Does this need a human reply within one hour?" },
+          queue: {
+            type: "choice",
+            instructions: "Which queue owns this ticket?",
+            criteria: { billing: "charges, refunds, invoices", technical: "bugs, errors", other: null },
+          },
+        },
+        max_output_tokens: 64,
+      }),
+    });
+    const run = await res.json();
+    if (!res.ok) throw new Error(`${run.error.code} (${run.error.request_id})`);
+    console.log(run.decision.answers.urgent.probability, run.decision.answers.queue.choice);
+    ```
+
+    ```python Python
+    import os, uuid, requests
+
+    res = requests.post(
+        "https://api.opentype.dev/v1/runs",
+        headers={
+            "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+            "Idempotency-Key": str(uuid.uuid4()),  # reuse the same key if you retry this request
+        },
+        json={
+            "kind": "decision",
+            "state": {"subject": "Charged twice for March", "body": "My card was charged twice. Refund today or I dispute it."},
+            "instructions": "You triage inbound support tickets for a SaaS billing team.",
+            "questions": {
+                "urgent": {"type": "noul", "instructions": "Does this need a human reply within one hour?"},
+                "queue": {
+                    "type": "choice",
+                    "instructions": "Which queue owns this ticket?",
+                    "criteria": {"billing": "charges, refunds, invoices", "technical": "bugs, errors", "other": None},
+                },
+            },
+            "max_output_tokens": 64,
+        },
+        timeout=130,  # the server-side deadline is at most 120 s
+    )
+    run = res.json()
+    if not res.ok:
+        raise RuntimeError(f"{run['error']['code']} ({run['error']['request_id']})")
+    print(run["decision"]["answers"]["urgent"]["probability"], run["decision"]["answers"]["queue"]["choice"])
+    ```
+
+    </CodeGroup>
+  </Step>
+  <Step title="Read the answer">
+    ```json
+    {
+      "run_id": "run_0b6f0e2a9f4c4b1c9a3d5e7f8a9b0c1d",
+      "kind": "decision",
+      "state": "completed",
+      "input_digest": "9f2c...",
+      "output_digest": "41ab...",
+      "decision": {
+        "answers": {
+          "urgent": {"type": "noul", "probability": 0.83, "label_mass": 0.991, "answered_within_labels": true},
+          "queue": {"type": "choice", "choice": "billing",
+                    "probabilities": {"billing": 0.71, "technical": 0.2, "other": 0.09},
+                    "confidence": 0.71, "label_mass": 0.964, "answered_within_labels": true}
+        },
+        "draws": 1,
+        "read": "slot_constrained",
+        "model": "...",
+        "stages": [["queue", "urgent"]]
+      },
+      "usage": {"input_tokens": 412, "output_tokens": 23},
+      "cost_micros": 3,
+      "cost_basis": "provider_reported",
+      "replayed": false
+    }
+    ```
+
+    - `urgent.probability` is **P(yes)**: 0.83 means the model puts 83% on "yes".
+    - `queue.choice` is the most likely option; `probabilities` has every option you defined.
+    - `answered_within_labels: true` means the model put its mass on your labels, so the probabilities are not a rescaling.
+    - `cost_micros: 3` is $0.000003.
+  </Step>
+</Steps>
+
+## Next
+
+<Columns cols={2}>
+  <Card title="Decision runs" icon="split" href="/guides/decision-runs">
+    `score` questions, dependencies, `ask_if`, draws, thresholds.
+  </Card>
+  <Card title="Errors" icon="triangle-alert" href="/errors">
+    Every error code and what to do about it.
+  </Card>
+</Columns>

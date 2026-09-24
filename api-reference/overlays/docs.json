@@ -1,0 +1,342 @@
+{
+  "overlay": "1.0.0",
+  "info": {
+    "title": "OpenType docs overlay",
+    "version": "1.0.0"
+  },
+  "actions": [
+    {
+      "target": "$",
+      "update": {
+        "servers": [
+          {
+            "url": "https://api.opentype.dev",
+            "description": "Production"
+          }
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    {
+      "target": "$.components",
+      "update": {
+        "securitySchemes": {
+          "bearer": {
+            "type": "http",
+            "scheme": "bearer",
+            "description": "An API key (`otsk_...`) or a WorkOS access token."
+          },
+          "workos_bearer": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "WorkOS access token. Console only."
+          }
+        }
+      }
+    },
+    {
+      "target": "$.paths['/healthz'].get",
+      "update": {
+        "summary": "Liveness",
+        "x-mint": {
+          "href": "/api-reference/health/liveness"
+        },
+        "security": []
+      }
+    },
+    {
+      "target": "$.paths['/readyz'].get",
+      "update": {
+        "summary": "Readiness",
+        "x-mint": {
+          "href": "/api-reference/health/readiness"
+        },
+        "security": []
+      }
+    },
+    {
+      "target": "$.paths['/v1/runs'].post",
+      "update": {
+        "summary": "Create a run",
+        "x-mint": {
+          "href": "/api-reference/runs/create"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/runs'].get",
+      "update": {
+        "summary": "List runs",
+        "x-mint": {
+          "href": "/api-reference/runs/list"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/runs/{run_id}'].get",
+      "update": {
+        "summary": "Retrieve a run",
+        "x-mint": {
+          "href": "/api-reference/runs/retrieve"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/runs/{run_id}/stream'].get",
+      "update": {
+        "summary": "Stream a run",
+        "x-mint": {
+          "href": "/api-reference/runs/stream"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/keys'].post",
+      "update": {
+        "summary": "Create an API key",
+        "x-mint": {
+          "href": "/api-reference/keys/create"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/keys'].get",
+      "update": {
+        "summary": "List API keys",
+        "x-mint": {
+          "href": "/api-reference/keys/list"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/keys/{key_id}'].get",
+      "update": {
+        "summary": "Retrieve an API key",
+        "x-mint": {
+          "href": "/api-reference/keys/retrieve"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/keys/{key_id}/rotate'].post",
+      "update": {
+        "summary": "Rotate an API key",
+        "x-mint": {
+          "href": "/api-reference/keys/rotate"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/keys/{key_id}'].delete",
+      "update": {
+        "summary": "Revoke an API key",
+        "x-mint": {
+          "href": "/api-reference/keys/revoke"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/members'].get",
+      "update": {
+        "summary": "List members",
+        "x-mint": {
+          "href": "/api-reference/members/list"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/members/invitations'].post",
+      "update": {
+        "summary": "Invite a member",
+        "x-mint": {
+          "href": "/api-reference/members/invite"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/members/{member_id}'].patch",
+      "update": {
+        "summary": "Change a member role",
+        "x-mint": {
+          "href": "/api-reference/members/change-role"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/members/{member_id}'].delete",
+      "update": {
+        "summary": "Remove a member",
+        "x-mint": {
+          "href": "/api-reference/members/remove"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/usage'].get",
+      "update": {
+        "summary": "Usage rollup",
+        "x-mint": {
+          "href": "/api-reference/usage/rollup"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/usage/ledger'].get",
+      "update": {
+        "summary": "Usage ledger",
+        "x-mint": {
+          "href": "/api-reference/usage/ledger"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/usage/runs/{run_id}'].get",
+      "update": {
+        "summary": "Run usage",
+        "x-mint": {
+          "href": "/api-reference/usage/run"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/quota'].get",
+      "update": {
+        "summary": "Quota",
+        "x-mint": {
+          "href": "/api-reference/usage/quota"
+        }
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/callback'].post",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/invitations'].get",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/invitations'].post",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/invitations/{invitation_id}/revoke'].post",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/organizations'].get",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/organizations/switch'].post",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/organizations/{organization_id}'].get",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/organizations/{organization_id}/memberships'].get",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/refresh'].post",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/roles'].get",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/session'].get",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/sign-in'].post",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/auth/sign-out'].post",
+      "update": {
+        "x-excluded": true
+      }
+    },
+    {
+      "target": "$.paths['/v1/runs'].get.parameters[?(@.name=='limit')]",
+      "update": {
+        "in": "query"
+      }
+    },
+    {
+      "target": "$.paths['/v1/runs'].get.parameters[?(@.name=='offset')]",
+      "update": {
+        "in": "query"
+      }
+    },
+    {
+      "target": "$.paths['/v1/runs'].post",
+      "update": {
+        "description": "Submits a verdict or decision run and returns its answer. `Idempotency-Key` is required; replaying a key returns the stored run and never charges twice. `200` means the run is terminal; `202` means a replayed key found the run still in flight. See [Errors](/errors) for every refusal."
+      }
+    },
+    {
+      "target": "$.paths['/v1/runs/{run_id}/stream'].get",
+      "update": {
+        "description": "Observes a run as `text/event-stream`. Reads durable state only and never calls a provider, so observing a run cannot charge for it. Emits one `state` event and, when the run is terminal, one `terminal` event with the digests and the whole answer, then closes. There are no partial-token events. See [Streaming](/guides/streaming)."
+      }
+    },
+    {
+      "target": "$.paths['/v1/keys/{key_id}/rotate'].post",
+      "update": {
+        "description": "Issues a new secret for an existing key and returns it once. The old secret stops working immediately; there is no overlap window. A revoked key cannot be rotated (`409 key_revoked`)."
+      }
+    },
+    {
+      "target": "$.paths['/v1/members/invitations'].post",
+      "update": {
+        "description": "Invites someone at a role. A role above the caller's own is refused (`403 role_exceeds_caller`)."
+      }
+    },
+    {
+      "target": "$.paths['/v1/quota'].get",
+      "update": {
+        "description": "The organization's quota limits and what is left in the current period. These are the same numbers run admission enforces. Requires `usage_read`."
+      }
+    },
+    {
+      "target": "$.components.schemas.CreateRunRequest",
+      "update": {
+        "description": "A run submission: a verdict (`messages` + `schema`) or a decision (`state` + `questions`), selected by `kind` (default `verdict`). There is no `model` field; the route is chosen from the catalog. Unknown fields are rejected, and fields that belong to the other kind are `400 invalid_body`."
+      }
+    }
+  ]
+}

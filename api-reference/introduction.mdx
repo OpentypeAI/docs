@@ -1,0 +1,40 @@
+---
+title: "API reference"
+description: "Base URL, headers, pagination, and the OpenAPI document."
+---
+
+The pages in this tab are generated from the OpenAPI 3.1 document that the server itself emits. The same document is served at `GET /openapi.json`.
+
+## Base URL
+
+```text
+https://api.opentype.dev
+```
+
+## Headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer otsk_...`. See [Authentication](/authentication).
+</ParamField>
+
+<ParamField header="Idempotency-Key" type="string">
+  Required on `POST /v1/runs`, 1 to 255 bytes. Reuse the same key on every retry of one logical request. See [Concepts](/concepts#idempotency).
+</ParamField>
+
+<ParamField header="Content-Type" type="string">
+  `application/json` on every request with a body.
+</ParamField>
+
+## Pagination
+
+`GET /v1/runs` takes `limit` (1 to 100, default 20) and `offset` (default 0) and lists newest first. The response repeats the `limit` and `offset` it applied, so you can see when an oversized `limit` was lowered. Unknown query parameters are `400`.
+
+## Errors
+
+Every error uses the same envelope, `{"error": {"code", "message", "request_id"}}`. See [Errors](/errors) for every code.
+
+## Generate types
+
+```bash
+npx openapi-typescript https://api.opentype.dev/openapi.json -o opentype.ts
+```

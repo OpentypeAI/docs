@@ -1,0 +1,8 @@
+{
+  "name": "opentype-docs",
+  "private": true,
+  "scripts": {
+    "dev": "mint dev",
+    "check": "mint validate && mint broken-links --check-anchors"
+  }
+}

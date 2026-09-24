@@ -1,0 +1,61 @@
+---
+title: "Billing and credits"
+description: "Prepaid credits, what happens at zero balance, and auto-recharge."
+---
+
+OpenType is prepaid. You buy credits and each run's settled cost (`cost_micros`) is drawn from the balance. Amounts are integer micro-USD, like every other money field.
+
+<Note>
+The `/v1/billing` routes are being added to the API and are not in the [API reference](/api-reference/introduction) yet. Until they are, manage billing in the [console](https://console.opentype.dev/billing). This page describes the behaviour those routes expose.
+</Note>
+
+## Balance and top-ups
+
+| Route | Scope | Does |
+| --- | --- | --- |
+| `GET /v1/billing` | `billing_read` | Balance, auto-recharge settings, and recent transactions |
+| `POST /v1/billing/checkout` | `billing_write` | Starts a Stripe Checkout session to add funds and returns its URL |
+| `POST /v1/billing/portal` | `billing_write` | Opens the Stripe customer portal for cards and invoices |
+| `PUT /v1/billing/auto_recharge` | `billing_write` | Turns auto-recharge on or off and sets its threshold and amount |
+
+Only the `owner` role holds `billing_read` and `billing_write` ([Authentication](/authentication#scopes)). A key used only for runs does not need either.
+
+Funds are credited when Stripe confirms the payment, not when checkout starts. A payment is credited exactly once, even if Stripe delivers the confirmation more than once.
+
+## Zero balance: `402 insufficient_credits`
+
+When billing is enabled, `POST /v1/runs` checks the balance before any provider call. If the balance cannot cover the run, the run is refused:
+
+```json
+{
+  "error": {
+    "code": "insufficient_credits",
+    "message": "...",
+    "request_id": "req_..."
+  }
+}
+```
+
+- Nothing is created, reserved, or charged.
+- Retrying will not help until funds are added. Add credits in the console, or turn on auto-recharge, then retry with the **same** `Idempotency-Key`.
+- `402` is separate from the `429` quota refusals. Quotas cap what an organization may spend in a period; credits are what it has paid for. See [Usage and quotas](/usage-and-quotas#quota).
+
+```ts
+const res = await fetch("https://api.opentype.dev/v1/runs", init);
+if (res.status === 402) {
+  // Stop the queue and alert a human. Retrying before a top-up only produces more 402s.
+  throw new Error("OpenType balance exhausted");
+}
+```
+
+## Auto-recharge
+
+With auto-recharge on, when the balance falls below your threshold, the card on file is charged your chosen amount. Auto-recharge needs a saved card, so add one in the Stripe portal first. It is off until an owner turns it on.
+
+## What you are charged for
+
+- A completed run is charged its settled `cost_micros`. For multi-draw decisions this is `estimated` at catalog prices ([Concepts](/concepts#what-a-run-returns)).
+- A replayed `Idempotency-Key` is never charged again.
+- Refusals before the provider call are free: every `400`, `402`, `409`, `413`, and `429`.
+- `503 verdict_schema_violation` is charged for the attempts made, because those provider calls happened.
+- `GET /v1/usage/ledger` lists every charged provider call ([Usage and quotas](/usage-and-quotas#ledger)).

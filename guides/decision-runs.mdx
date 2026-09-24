@@ -1,0 +1,158 @@
+---
+title: "Decision runs"
+description: "Classify, gate, and rate with typed questions, then set thresholds on the probabilities."
+---
+
+This guide triages a support ticket with all three question types, one dependency, and one conditional question.
+
+## The request
+
+```json
+{
+  "kind": "decision",
+  "state": {
+    "subject": "API down since 09:00?",
+    "body": "Every call returns 503 since this morning. We are losing orders. Fix it now or we cancel."
+  },
+  "instructions": "You triage inbound support tickets for a developer platform.",
+  "questions": {
+    "queue": {
+      "type": "choice",
+      "instructions": "Which queue owns this ticket?",
+      "criteria": {"billing": "charges, refunds, invoices", "technical": "errors, outages, integration", "sales": null}
+    },
+    "urgent": {
+      "type": "noul",
+      "instructions": "Does this need a human reply within one hour?",
+      "criteria": {"true": "outage, data loss, legal or churn threat", "false": "anything that can wait"}
+    },
+    "tone": {
+      "type": "score",
+      "instructions": "How upset is the customer?",
+      "criteria": ["calm", "annoyed", "furious"]
+    },
+    "page_oncall": {
+      "type": "noul",
+      "instructions": "Is this a production outage that should page the on-call engineer?",
+      "depends_on": ["queue"],
+      "ask_if": {"urgent": ["yes"]}
+    }
+  },
+  "question_order": ["queue", "urgent", "tone", "page_oncall"],
+  "draws": 1,
+  "max_output_tokens": 64
+}
+```
+
+- `ask_if: {"urgent": ["yes"]}` asks `page_oncall` only when `urgent` comes back `yes`. A `noul` question's answer names are `yes` and `no`. Every other answer name is one of your own option or level names.
+- `depends_on: ["queue"]` reads `page_oncall` in a stage after `queue`.
+- `question_order` sets the order in which questions are read. It must list exactly the keys of `questions`.
+
+## Send it
+
+<CodeGroup>
+
+```bash cURL
+curl -sS https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-48213-triage-v1" \
+  -d @triage.json
+```
+
+```ts TypeScript
+import { readFileSync } from "node:fs";
+
+const body = readFileSync("triage.json", "utf8");
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    // Derive the key from the work item so a retry of the same ticket never pays twice.
+    "Idempotency-Key": "ticket-48213-triage-v1",
+  },
+  body,
+});
+const run = await res.json();
+if (!res.ok) throw new Error(`${res.status} ${run.error.code} (${run.error.request_id})`);
+```
+
+```python Python
+import os, requests
+
+with open("triage.json") as f:
+    body = f.read()
+
+res = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        # Derive the key from the work item so a retry of the same ticket never pays twice.
+        "Idempotency-Key": "ticket-48213-triage-v1",
+    },
+    data=body,
+    timeout=130,
+)
+run = res.json()
+if not res.ok:
+    raise RuntimeError(f"{res.status_code} {run['error']['code']} ({run['error']['request_id']})")
+```
+
+</CodeGroup>
+
+## Read the answers
+
+```json
+"answers": {
+  "queue": {"type": "choice", "choice": "technical",
+            "probabilities": {"billing": 0.02, "technical": 0.96, "sales": 0.02},
+            "confidence": 0.96, "label_mass": 0.99, "answered_within_labels": true},
+  "urgent": {"type": "noul", "probability": 0.94, "label_mass": 0.99, "answered_within_labels": true},
+  "tone": {"type": "score", "score": 1.81,
+           "legend": {"0": "calm", "1": "annoyed", "2": "furious"},
+           "probabilities": {"0": 0.03, "1": 0.13, "2": 0.84},
+           "confidence": 0.84, "label_mass": 0.98, "answered_within_labels": true},
+  "page_oncall": {"type": "noul", "probability": 0.88, "label_mass": 0.99, "answered_within_labels": true}
+}
+```
+
+If `urgent` had come back `no`, `page_oncall` would be:
+
+```json
+{"type": "skipped", "because": {"question": "urgent", "answered": "no", "required": ["yes"]}}
+```
+
+## Thresholds, not argmax
+
+A probability is only useful if you compare it to a threshold that reflects what a mistake costs you:
+
+```ts
+const a = run.decision.answers;
+
+// Only act on probabilities the model put on your own labels.
+const trusted = (x: { answered_within_labels?: boolean }) => x.answered_within_labels !== false;
+
+if (a.page_oncall?.type === "noul" && trusted(a.page_oncall) && a.page_oncall.probability >= 0.8) {
+  pageOncall();
+} else if (a.urgent.type === "noul" && trusted(a.urgent) && a.urgent.probability >= 0.5) {
+  routeToHuman(a.queue.choice);
+} else {
+  routeToQueue(a.queue.choice);
+}
+```
+
+- Pick each threshold from the cost of a false positive versus a false negative, not 0.5 by default.
+- Send `answered_within_labels: false` to a human, whatever the probability.
+- When probabilities often land near a threshold, try `draws` (2 to 8). Each draw is paid for, and the cost is reported with `cost_basis: "estimated"`. When you only use `choice` and never compare a number to anything, keep `draws: 1`.
+
+## Failure modes
+
+| Status | Code | What to do |
+| --- | --- | --- |
+| `400` | `invalid_decision_questions` | Fix the question set (bounds, ids, `ask_if` answer names, cycles). Nothing was charged. |
+| `400` | `invalid_body` | A verdict field (`system`, `messages`, `schema`) was sent on a decision, or a required field is missing. |
+| `503` | `decision_unavailable` | No decision-capable route, or the provider refused the question set. Retry later with the **same** `Idempotency-Key`. |
+
+See [Errors](/errors) for the rest.

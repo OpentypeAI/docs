@@ -1,0 +1,227 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "sequoia",
+  "name": "OpenType",
+  "description": "One model call per run. You send a JSON Schema or a set of typed questions; OpenType routes, calls one model, validates, and returns the answer.",
+  "colors": {
+    "primary": "#0A7A3B",
+    "light": "#2DEC80",
+    "dark": "#0A7A3B"
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg",
+    "href": "https://opentype.dev"
+  },
+  "favicon": "/favicon.svg",
+  "fonts": {
+    "heading": {
+      "family": "Geist"
+    },
+    "body": {
+      "family": "Geist"
+    }
+  },
+  "appearance": {
+    "default": "system"
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "styling": {
+    "codeblocks": "system"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Console",
+        "href": "https://console.opentype.dev"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Get an API key",
+      "href": "https://console.opentype.dev/keys"
+    }
+  },
+  "navigation": {
+    "global": {
+      "anchors": [
+        {
+          "anchor": "Changelog",
+          "icon": "history",
+          "href": "/changelog"
+        }
+      ]
+    },
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "icon": "book-open",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "authentication"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/decision-runs",
+              "guides/streaming"
+            ]
+          },
+          {
+            "group": "Account",
+            "pages": [
+              "usage-and-quotas",
+              "billing-and-credits",
+              "rate-limits"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "errors",
+              "changelog"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API reference",
+        "icon": "square-terminal",
+        "openapi": {
+          "source": "api-reference/openapi.json",
+          "overlays": [
+            "api-reference/overlays/docs.json"
+          ]
+        },
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api-reference/introduction"
+            ]
+          },
+          {
+            "group": "Runs",
+            "pages": [
+              "POST /v1/runs",
+              "GET /v1/runs",
+              "GET /v1/runs/{run_id}",
+              "GET /v1/runs/{run_id}/stream"
+            ]
+          },
+          {
+            "group": "API keys",
+            "pages": [
+              "POST /v1/keys",
+              "GET /v1/keys",
+              "GET /v1/keys/{key_id}",
+              "POST /v1/keys/{key_id}/rotate",
+              "DELETE /v1/keys/{key_id}"
+            ]
+          },
+          {
+            "group": "Usage and quota",
+            "pages": [
+              "GET /v1/usage",
+              "GET /v1/usage/ledger",
+              "GET /v1/usage/runs/{run_id}",
+              "GET /v1/quota"
+            ]
+          },
+          {
+            "group": "Members",
+            "pages": [
+              "GET /v1/members",
+              "POST /v1/members/invitations",
+              "PATCH /v1/members/{member_id}",
+              "DELETE /v1/members/{member_id}"
+            ]
+          },
+          {
+            "group": "Health",
+            "pages": [
+              "GET /healthz",
+              "GET /readyz"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "api": {
+    "playground": {
+      "display": "interactive"
+    },
+    "params": {
+      "expanded": "closed"
+    },
+    "examples": {
+      "languages": [
+        "bash",
+        "typescript",
+        "python"
+      ],
+      "defaults": "required",
+      "autogenerate": true
+    }
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "claude",
+      "chatgpt",
+      "cursor",
+      "mcp"
+    ]
+  },
+  "seo": {
+    "indexing": "navigable"
+  },
+  "search": {
+    "prompt": "Search runs, schemas, errors..."
+  },
+  "errors": {
+    "404": {
+      "redirect": false,
+      "title": "Page not found",
+      "description": "Try the [quickstart](/quickstart) or the [API reference](/api-reference/introduction)."
+    }
+  },
+  "footer": {
+    "links": [
+      {
+        "header": "OpenType",
+        "items": [
+          {
+            "label": "Console",
+            "href": "https://console.opentype.dev"
+          },
+          {
+            "label": "Home",
+            "href": "https://opentype.dev"
+          }
+        ]
+      }
+    ]
+  },
+  "background": {
+    "color": {
+      "light": "#F7F7F4",
+      "dark": "#090A09"
+    }
+  }
+}
