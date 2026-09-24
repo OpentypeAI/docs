@@ -1,7 +1,7 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "sequoia",
-  "name": "OpenType",
+  "name": "OpenType Docs",
   "description": "OpenType answers typed questions about your data in one model call per run. Send a state and a set of questions; get calibrated answers back.",
   "colors": {
     "primary": "#0A7A3B",
@@ -394,8 +394,12 @@
   "seo": {
     "indexing": "navigable",
     "metatags": {
-      "og:site_name": "OpenType Docs",
-      "twitter:card": "summary_large_image"
+      "og:site_name": "OpenType",
+      "og:image": "https://opentype.dev/og/docs.png",
+      "og:image:width": "1200",
+      "og:image:height": "630",
+      "twitter:card": "summary_large_image",
+      "twitter:image": "https://opentype.dev/og/docs.png"
     }
   },
   "errors": {

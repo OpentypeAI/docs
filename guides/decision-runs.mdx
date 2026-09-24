@@ -299,7 +299,7 @@ Trim long states to the fields the questions actually need. Because the body cha
 | `400` | [`idempotency_key_required`](/problems/idempotency_key_required) | No `Idempotency-Key` header | Send one per logical request. |
 | `402` | [`insufficient_credits`](/problems/insufficient_credits) | The balance cannot cover the run's hold | [Add credit](/guides/handling-insufficient-credits), then retry with the same key. |
 | `409` | [`idempotency_conflict`](/problems/idempotency_conflict) | The key was already used with a different body | Use a new key for a new body. |
-| `413` | [`input_too_large`](/problems/input_too_large) | The input estimate is above 3,968 tokens | Shrink the `state` or the questions. |
+| `413` | [`input_too_large`](/problems/input_too_large) | The input estimate is above 3,968 tokens | Shrink the `state` or the questions, then retry with a new `Idempotency-Key`. |
 | `429` | [`organization_spend_quota_exhausted`](/problems/organization_spend_quota_exhausted), [`organization_token_quota_exhausted`](/problems/organization_token_quota_exhausted) | The period quota is used up | See [Spend limits and quotas](/guides/spend-limits-and-quotas). |
 | `503` | [`decision_unavailable`](/problems/decision_unavailable) | No route could serve the decision, or the question set was refused at read time | Check the [labels](#keep-labels-short-and-single-token-friendly). Otherwise retry later with a new key. |
 | `504` | [`deadline_exceeded`](/problems/deadline_exceeded) | The deadline passed | Raise `deadline_ms` or shrink the input, then retry with a new key. |
