@@ -92,7 +92,7 @@ missing from `reference/errors.mdx`.
 ## Refreshing the API reference
 
 `api-reference/openapi.json` is a copy of the specification the API serves, scrubbed for the
-public site; `api-reference/overlays/docs.json` adds summaries, page addresses (`x-mint.href`)
+public site; `api-reference/overlays/opentype-overlay.json` adds summaries, page addresses (`x-mint.href`)
 and the security scheme.
 
 1. Take the current specification from the service.
