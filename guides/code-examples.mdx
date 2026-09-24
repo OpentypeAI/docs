@@ -1,0 +1,501 @@
+---
+title: "Code examples"
+description: "Complete clients in shell, TypeScript and Python: a decision run with an idempotency key, error parsing, retries, request-id logging and answer reading."
+icon: "code"
+keywords: ["examples", "client", "SDK", "TypeScript", "Python", "curl", "retry", "sample code"]
+---
+
+This page has one complete client in three languages, ready to copy into a project. Each one sends a decision run the way the [production checklist](/guides/production-checklist) asks: with an idempotency key derived from your business id, a timeout above the run's deadline, the retry policy from [Error handling](/guides/error-handling), error-envelope parsing, request-id logging, and code that reads every answer type.
+
+## What the clients do
+
+| Behavior | Why |
+| --- | --- |
+| The `Idempotency-Key` is your business id, such as `ticket-4822-triage` | A resend of the same work can never run or charge twice |
+| A timeout or network error resends with the **same** key | The run may already exist. The replay returns it with `replayed: true` instead of running it again. |
+| `429` backs off and retries with the **same** key | A quota refusal stores nothing, so the key is still free |
+| `500`, `503`, `504` back off and retry with a **new** key (`-r1`, `-r2`, ...) | A run that failed after admission is stored under the old key and would only be replayed |
+| A `202` waits one full deadline, then asks again with the same key. A second `202`, or a `200` replay with `state: "failed"`, retries with a new key. | A `202` is a stored run that has not settled. One that is still `pending` after its deadline never reached the model and will stay `pending`; a failed replay will not change. |
+| `402` stops without retrying | Credit has to be added first. See [Handling insufficient credits](/guides/handling-insufficient-credits). |
+| Any other `4xx` stops without retrying | The request or the key must be fixed first |
+| Every attempt sends its own `x-request-id` and logs it | You can match any line in your logs to a request |
+| Errors are read from `error.code`, with a fallback when the body is not JSON | Branch on the code, never the message |
+
+Retries are bounded to five attempts with exponential backoff and jitter. The status and `error.code` decide every retry, as in the table above.
+
+## Setup
+
+```bash
+export OPENTYPE_API_KEY="otsk_..."   # a key with runs_write and runs_read
+```
+
+- The shell client needs `curl` and `jq`.
+- The TypeScript client needs Node.js 18 or later, and runs with `npx tsx opentype.ts`.
+- The Python client needs Python 3.9 or later and `pip install requests`.
+
+## The client
+
+<CodeGroup>
+
+```bash curl
+#!/usr/bin/env bash
+# send-run.sh - usage: ./send-run.sh ticket-4822-triage body.json
+set -uo pipefail
+
+API=https://api.opentype.dev
+business_id="$1"
+body_file="$2"
+deadline_s=$(( $(jq '.deadline_ms // 30000' "$body_file") / 1000 ))
+resp=$(mktemp)
+trap 'rm -f "$resp"' EXIT
+
+generation=0
+for attempt in 1 2 3 4 5; do
+  key="$business_id"
+  [ "$generation" -gt 0 ] && key="$business_id-r$generation"
+  request_id="$business_id.$attempt"
+
+  status=$(curl -sS -o "$resp" -w '%{http_code}' \
+    --max-time $((deadline_s + 10)) \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -H "Idempotency-Key: $key" \
+    -H "x-request-id: $request_id" \
+    --data @"$body_file" \
+    "$API/v1/runs") || status=000
+
+  code=$(jq -r '.error.code // empty' "$resp" 2>/dev/null)
+  echo "attempt=$attempt key=$key request_id=$request_id status=$status code=${code:-none}" >&2
+
+  case "$status" in
+    200)
+      if [ "$(jq -r .state "$resp")" = "completed" ]; then cat "$resp"; exit 0; fi
+      generation=$((generation + 1)) ;;   # a failed run replayed: new key
+    202) if [ "${pending_key:-}" = "$key" ]; then
+           generation=$((generation + 1))  # still pending after a deadline: new key
+         else
+           pending_key="$key"; sleep "$deadline_s"  # not settled yet: wait, same key
+         fi ;;
+    000) ;;                                # timeout or network error: same key
+    429) ;;                                # quota: same key
+    5??) generation=$((generation + 1)) ;; # failed after admission: new key
+    *)   cat "$resp" >&2; exit 1 ;;        # 400, 401, 402, 403, 404, 409, 413: fix first
+  esac
+  [ "$attempt" -lt 5 ] && sleep $(( (1 << attempt) + RANDOM % 2 ))
+done
+echo "giving up after 5 attempts" >&2
+exit 1
+```
+
+```ts TypeScript
+// opentype.ts - run with: npx tsx opentype.ts (Node.js 18+)
+const API = "https://api.opentype.dev";
+const KEY = process.env.OPENTYPE_API_KEY;
+if (!KEY) throw new Error("set OPENTYPE_API_KEY");
+
+export class OpenTypeError extends Error {
+  constructor(
+    public status: number,
+    public code: string | null,
+    public requestId: string | null,
+    detail: string,
+  ) {
+    super(`${status} ${code ?? "(no code)"}: ${detail} [request_id=${requestId}]`);
+  }
+}
+
+type Common = { label_mass?: number; answered_within_labels?: boolean };
+export type Answer = Common &
+  (
+    | { type: "noul"; probability: number }
+    | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number }
+    | { type: "score"; score: number; legend: Record<string, string>; probabilities: Record<string, number>; confidence: number }
+    | { type: "skipped"; because: { question: string; answered?: string; required: string[] } }
+  );
+
+export type Run = {
+  run_id: string;
+  kind: "decision" | "verdict";
+  state: "pending" | "completed" | "failed";
+  decision?: { answers: Record<string, Answer>; draws: number; model?: string; stages?: string[][] };
+  usage?: { input_tokens: number; output_tokens: number };
+  cost_micros?: number;
+  replayed: boolean;
+};
+
+// Idempotency keys and request ids must be plain ASCII; x-request-id allows A-Z a-z 0-9 . _ -
+const safe = (value: string, limit: number) => value.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, limit);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const backoff = (attempt: number) => Math.min(30_000, 500 * 2 ** attempt) * (0.5 + Math.random() / 2);
+const log = (fields: Record<string, unknown>) => console.error(JSON.stringify({ at: new Date().toISOString(), ...fields }));
+
+async function parseError(res: Response): Promise<OpenTypeError> {
+  const headerId = res.headers.get("x-request-id");
+  const text = await res.text();
+  try {
+    const { error } = JSON.parse(text);
+    return new OpenTypeError(res.status, error.code, error.request_id ?? headerId, error.message);
+  } catch {
+    // A few framework refusals are plain text with no envelope: keep the status and the header id.
+    return new OpenTypeError(res.status, null, headerId, text.slice(0, 200));
+  }
+}
+
+export async function sendDecision(businessId: string, body: Record<string, unknown>, maxAttempts = 5): Promise<Run> {
+  const deadlineMs = (body.deadline_ms as number | undefined) ?? 30_000;
+  let generation = 0; // bumped whenever the next attempt needs a new idempotency key
+  let pendingKey: string | null = null; // the key that last answered 202
+  let last: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) await sleep(backoff(attempt));
+    const idempotencyKey = safe(generation === 0 ? businessId : `${businessId}-r${generation}`, 255);
+    const requestId = safe(`${businessId}.${attempt}`, 128);
+
+    let res: Response;
+    try {
+      res = await fetch(`${API}/v1/runs`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${KEY}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+          "x-request-id": requestId,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(deadlineMs + 10_000),
+      });
+    } catch (err) {
+      // Timeout or network failure: the run may exist, so resend with the SAME key.
+      log({ event: "network_error", businessId, idempotencyKey, requestId, error: String(err) });
+      last = err;
+      continue;
+    }
+
+    const echoedId = res.headers.get("x-request-id");
+    if (res.status === 200 || res.status === 202) {
+      const run = (await res.json()) as Run;
+      log({ event: "run", status: res.status, businessId, idempotencyKey, requestId: echoedId,
+            runId: run.run_id, state: run.state, replayed: run.replayed, costMicros: run.cost_micros });
+      if (run.state === "completed") return run;
+      if (res.status === 202 && pendingKey !== idempotencyKey) {
+        pendingKey = idempotencyKey; // not settled yet: wait one deadline, then ask again with the same key
+        await sleep(deadlineMs);
+      } else {
+        generation++; // a failed replay, or pending twice: this key is spent
+      }
+      last = new Error(`run ${run.run_id} is ${run.state}`);
+      continue;
+    }
+
+    const err = await parseError(res);
+    log({ event: "error", status: err.status, code: err.code, businessId, idempotencyKey, requestId: err.requestId });
+    last = err;
+    if (res.status === 429) continue; // quota refusal: nothing stored, same key
+    if (res.status >= 500) { generation++; continue; } // failed after admission: new key
+    throw err; // 400, 401, 402, 403, 404, 409, 413: fix the cause first
+  }
+  throw last instanceof Error ? last : new Error("gave up");
+}
+
+export function describeAnswers(answers: Record<string, Answer>): string[] {
+  const lines: string[] = [];
+  for (const [id, a] of Object.entries(answers)) {
+    const review = a.answered_within_labels === false ? " (outside the labels: review by hand)" : "";
+    switch (a.type) {
+      case "noul":
+        lines.push(`${id}: P(yes) = ${a.probability}${review}`);
+        break;
+      case "choice":
+        lines.push(`${id}: ${a.choice} (confidence ${a.confidence})${review}`);
+        break;
+      case "score": {
+        // score is the expected level index, 0-indexed; legend maps each index to your level name.
+        const [top] = Object.entries(a.probabilities).sort((x, y) => y[1] - x[1]);
+        lines.push(`${id}: expected ${a.score.toFixed(2)}, most likely "${a.legend[top[0]]}" (${top[1]})${review}`);
+        break;
+      }
+      case "skipped":
+        lines.push(`${id}: skipped, because ${a.because.question} answered ${a.because.answered ?? "nothing (it was skipped)"}, not one of ${a.because.required.join(", ")}`);
+        break;
+    }
+  }
+  return lines;
+}
+
+async function main() {
+  const run = await sendDecision("ticket-4822-triage", {
+    kind: "decision",
+    model: "neon-1.1",
+    instructions: "You triage customer support tickets.",
+    state: { ticket: "I was charged twice this month and nobody answers my emails.", plan: "pro" },
+    questions: {
+      urgent: { type: "noul", instructions: "reply within the hour?" },
+      bucket: { type: "choice", instructions: "which queue?", criteria: { billing: "payment problems", other: null } },
+      tone: { type: "score", instructions: "how annoyed?", criteria: ["calm", "annoyed", "furious"] },
+    },
+    question_order: ["urgent", "bucket", "tone"],
+    think_tokens: 64,
+    max_output_tokens: 16,
+  });
+  for (const line of describeAnswers(run.decision!.answers)) console.log(line);
+  // decision.model is present on a live response, not on a replay.
+  console.log(`run ${run.run_id}: ${run.cost_micros} micros, model ${run.decision!.model ?? "(replayed)"}`);
+}
+
+main().catch((err) => {
+  console.error(err instanceof OpenTypeError ? err.message : err);
+  process.exit(1);
+});
+```
+
+```python Python
+"""opentype_client.py - Python 3.9+, pip install requests."""
+import json
+import os
+import random
+import re
+import sys
+import time
+from datetime import datetime, timezone
+
+import requests
+
+API = "https://api.opentype.dev"
+KEY = os.environ["OPENTYPE_API_KEY"]
+
+
+class OpenTypeError(Exception):
+    def __init__(self, status, code, request_id, detail):
+        super().__init__(f"{status} {code or '(no code)'}: {detail} [request_id={request_id}]")
+        self.status, self.code, self.request_id = status, code, request_id
+
+
+def _safe(value, limit):
+    # Idempotency keys and request ids must be plain ASCII; x-request-id allows A-Z a-z 0-9 . _ -
+    return re.sub(r"[^A-Za-z0-9._-]", "_", value)[:limit]
+
+
+def _log(**fields):
+    fields["at"] = datetime.now(timezone.utc).isoformat()
+    print(json.dumps(fields), file=sys.stderr)
+
+
+def _parse_error(res):
+    header_id = res.headers.get("x-request-id")
+    try:
+        err = res.json()["error"]
+        return OpenTypeError(res.status_code, err["code"], err.get("request_id", header_id), err["message"])
+    except (ValueError, KeyError, TypeError):
+        # A few framework refusals are plain text with no envelope: keep the status and the header id.
+        return OpenTypeError(res.status_code, None, header_id, res.text[:200])
+
+
+def send_decision(business_id, body, max_attempts=5, session=None):
+    session = session or requests.Session()
+    deadline_s = body.get("deadline_ms", 30_000) / 1000
+    generation = 0  # bumped whenever the next attempt needs a new idempotency key
+    pending_key = None  # the key that last answered 202
+    last = None
+
+    for attempt in range(max_attempts):
+        if attempt:
+            time.sleep(min(30, 0.5 * 2 ** attempt) * random.uniform(0.5, 1))
+        key = _safe(business_id if generation == 0 else f"{business_id}-r{generation}", 255)
+        request_id = _safe(f"{business_id}.{attempt}", 128)
+
+        try:
+            res = session.post(
+                f"{API}/v1/runs",
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {KEY}",
+                    "Idempotency-Key": key,
+                    "x-request-id": request_id,
+                },
+                timeout=(5, deadline_s + 10),
+            )
+        except requests.RequestException as exc:
+            # Timeout or network failure: the run may exist, so resend with the SAME key.
+            _log(event="network_error", business_id=business_id, key=key, request_id=request_id, error=str(exc))
+            last = exc
+            continue
+
+        if res.status_code in (200, 202):
+            run = res.json()
+            _log(event="run", status=res.status_code, business_id=business_id, key=key,
+                 request_id=res.headers.get("x-request-id"), run_id=run["run_id"], state=run["state"],
+                 replayed=run["replayed"], cost_micros=run.get("cost_micros"))
+            if run["state"] == "completed":
+                return run
+            if res.status_code == 202 and pending_key != key:
+                pending_key = key  # not settled yet: wait one deadline, then ask again with the same key
+                time.sleep(deadline_s)
+            else:
+                generation += 1  # a failed replay, or pending twice: this key is spent
+            last = RuntimeError(f"run {run['run_id']} is {run['state']}")
+            continue
+
+        err = _parse_error(res)
+        _log(event="error", status=err.status, code=err.code, business_id=business_id, key=key, request_id=err.request_id)
+        last = err
+        if res.status_code == 429:
+            continue  # quota refusal: nothing stored, same key
+        if res.status_code >= 500:
+            generation += 1  # failed after admission: new key
+            continue
+        raise err  # 400, 401, 402, 403, 404, 409, 413: fix the cause first
+
+    raise last or RuntimeError("gave up")
+
+
+def describe_answers(answers):
+    lines = []
+    for qid, a in answers.items():
+        review = " (outside the labels: review by hand)" if a.get("answered_within_labels") is False else ""
+        if a["type"] == "noul":
+            lines.append(f"{qid}: P(yes) = {a['probability']}{review}")
+        elif a["type"] == "choice":
+            lines.append(f"{qid}: {a['choice']} (confidence {a['confidence']}){review}")
+        elif a["type"] == "score":
+            # score is the expected level index, 0-indexed; legend maps each index to your level name.
+            index, p = max(a["probabilities"].items(), key=lambda kv: kv[1])
+            lines.append(f"{qid}: expected {a['score']:.2f}, most likely \"{a['legend'][index]}\" ({p}){review}")
+        elif a["type"] == "skipped":
+            b = a["because"]
+            answered = b.get("answered", "nothing (it was skipped)")
+            lines.append(f"{qid}: skipped, because {b['question']} answered {answered}, not one of {', '.join(b['required'])}")
+    return lines
+
+
+if __name__ == "__main__":
+    try:
+        run = send_decision("ticket-4822-triage", {
+            "kind": "decision",
+            "model": "neon-1.1",
+            "instructions": "You triage customer support tickets.",
+            "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+            "questions": {
+                "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+                "bucket": {"type": "choice", "instructions": "which queue?",
+                           "criteria": {"billing": "payment problems", "other": None}},
+                "tone": {"type": "score", "instructions": "how annoyed?",
+                         "criteria": ["calm", "annoyed", "furious"]},
+            },
+            "question_order": ["urgent", "bucket", "tone"],
+            "think_tokens": 64,
+            "max_output_tokens": 16,
+        })
+    except OpenTypeError as exc:
+        sys.exit(str(exc))
+    for line in describe_answers(run["decision"]["answers"]):
+        print(line)
+    # decision.model is present on a live response, not on a replay.
+    print(f"run {run['run_id']}: {run['cost_micros']} micros, model {run['decision'].get('model', '(replayed)')}")
+```
+
+</CodeGroup>
+
+For the shell client, save the request body to a file first:
+
+```json body.json
+{
+  "kind": "decision",
+  "model": "neon-1.1",
+  "instructions": "You triage customer support tickets.",
+  "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+  "questions": {
+    "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+    "bucket": {"type": "choice", "instructions": "which queue?",
+               "criteria": {"billing": "payment problems", "other": null}},
+    "tone":   {"type": "score", "instructions": "how annoyed?",
+               "criteria": ["calm", "annoyed", "furious"]}
+  },
+  "question_order": ["urgent", "bucket", "tone"],
+  "think_tokens": 64,
+  "max_output_tokens": 16
+}
+```
+
+## What comes back
+
+A completed run, as the clients receive it:
+
+```json
+{
+  "run_id": "run_a4314b6cc08f4bd8814099a613abeb44",
+  "kind": "decision",
+  "state": "completed",
+  "input_digest": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+  "output_digest": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+  "decision": {
+    "answers": {
+      "bucket": {"answered_within_labels": true, "choice": "billing", "confidence": 0.71,
+                 "label_mass": 0.964, "probabilities": {"billing": 0.71, "other": 0.29}, "type": "choice"},
+      "tone":   {"answered_within_labels": true, "confidence": 0.46, "label_mass": 0.98,
+                 "legend": {"0": "calm", "1": "annoyed", "2": "furious"},
+                 "probabilities": {"0": 0.12, "1": 0.42, "2": 0.46}, "score": 1.34, "type": "score"},
+      "urgent": {"answered_within_labels": true, "label_mass": 0.991, "probability": 0.83, "type": "noul"}
+    },
+    "draws": 1,
+    "read": "slot_constrained",
+    "model": "neon-1.1",
+    "stages": [["urgent", "bucket", "tone"]],
+    "thought_tokens": 48,
+    "thought_closed": true
+  },
+  "usage": {"input_tokens": 412, "output_tokens": 23},
+  "cost_micros": 19,
+  "cost_basis": "provider_reported",
+  "replayed": false
+}
+```
+
+And what the TypeScript and Python clients print for it:
+
+```text
+bucket: billing (confidence 0.71)
+tone: expected 1.34, most likely "furious" (0.46)
+urgent: P(yes) = 0.83
+run run_a4314b6cc08f4bd8814099a613abeb44: 19 micros, model neon-1.1
+```
+
+Each attempt also writes one JSON log line to standard error, for example:
+
+```json
+{"at": "2026-09-24T09:14:02.118Z", "event": "run", "status": 200, "businessId": "ticket-4822-triage", "idempotencyKey": "ticket-4822-triage", "requestId": "ticket-4822-triage.0", "runId": "run_a4314b6cc08f4bd8814099a613abeb44", "state": "completed", "replayed": false, "costMicros": 19}
+```
+
+## Reading each answer type
+
+| `type` | Fields to read | Watch for |
+| --- | --- | --- |
+| `noul` | `probability` is P(yes) | There is no `confidence` on a yes/no answer. Pick your own threshold. |
+| `choice` | `choice` is the most likely option; `probabilities` is keyed by option name; `confidence` | Options you set to `null` in `criteria` still appear by name |
+| `score` | `score` is the expected level index, from 0; `legend` maps each index (as a string) to your level name; `probabilities` is keyed by that index | `score` is an average, so `1.34` is between the second and third levels. Use `probabilities` for the most likely level. |
+| `skipped` | `because.question`, `because.answered`, `because.required` | `answered` is missing when the question it depended on was itself skipped |
+| any | `answered_within_labels`, `label_mass` | When `answered_within_labels` is `false`, the probabilities are spread over labels the model did not favour. Send those to a person. |
+
+A skipped answer looks like this:
+
+```json
+{"type": "skipped", "because": {"question": "urgent", "answered": "no", "required": ["yes"]}}
+```
+
+See [Decision runs](/guides/decision-runs) for choosing thresholds, and [Conditional questions](/guides/conditional-questions) for `depends_on` and `ask_if`.
+
+## Adapting the clients
+
+- **Business ids.** Use an id that is stable for one piece of work, such as a ticket id plus the task name. Reusing it for a different body gets `409 idempotency_conflict`, which these clients do not retry.
+- **Deadlines.** Set `deadline_ms` in the body. The clients wait 10 seconds longer than it before timing out.
+- **Credit.** A `402` is raised to the caller. In a worker pool, pause every worker on the first `402`, as shown in [Handling insufficient credits](/guides/handling-insufficient-credits#code-pattern).
+- **Quota.** A `429` is retried a few times with backoff. For long waits, read `GET /v1/quota` instead; see [Spend limits and quotas](/guides/spend-limits-and-quotas#what-to-do).
+- **Concurrency.** Every run in flight holds up to 5,000 micros of credit and of the period's spend quota. Limit the number of parallel calls to what your balance covers.
+
+## Related
+
+- [Error handling](/guides/error-handling) - the full retry policy these clients follow.
+- [Idempotency](/guides/idempotency) - when to reuse a key and when to mint a new one.
+- [Production checklist](/guides/production-checklist) - everything to settle before going live.
+- [Decision runs](/guides/decision-runs) - designing questions and thresholds.
+- [Errors](/reference/errors) - every error code and what it means.

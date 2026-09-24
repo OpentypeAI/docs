@@ -1,0 +1,288 @@
+---
+title: "API keys in the console"
+sidebarTitle: "API keys"
+description: "Create an API key in two steps, copy its secret the one time it is shown, choose its scopes, read the keys table, and revoke a key from the console."
+icon: "key"
+keywords: ["API keys", "create key", "revoke key", "secret", "otsk_", "scopes", "console", "keys page"]
+---
+
+The **API keys** page is where you create the keys your servers, scripts and CI jobs send to `https://api.opentype.dev`, and where you revoke them. Read this page before you create your first key, and whenever you need to know which key does what or retire one.
+
+Open it at [console.opentype.dev/keys](https://console.opentype.dev/keys). The Playground does not need a key: it runs with your console session. A key is for your own code.
+
+## What a key is
+
+| Item | Looks like | Notes |
+| --- | --- | --- |
+| Secret | `otsk_` followed by 64 lowercase hex characters, 69 characters in all | The credential. Shown once, when the key is created. Send it as `Authorization: Bearer <secret>` |
+| Prefix | `otsk_fde66231`, the first 13 characters | Shown in the keys table so you can tell keys apart. Never the whole secret |
+| Key ID | `key_` followed by an opaque string | Names the key in URLs such as `DELETE /v1/keys/{key_id}`. Not a credential |
+
+OpenType stores only a SHA-256 digest of the secret, never the secret itself, so nobody can show it to you again. A key belongs to the organization you created it in, carries exactly the scopes you chose, and works until it is revoked or its secret is rotated.
+
+## Create a key
+
+You need the `keys_write` scope, which owners, admins and members hold. Choose **+ Create key** in the page header, or in the empty state if you have no keys yet.
+
+<Frame caption="Keys page before the first key">
+  <img src="/images/product/api-keys-no-keys.png" alt="API keys page with no keys yet and a Create your first key button" width="1192" height="392" />
+</Frame>
+
+### Step 1: name and scopes
+
+The page reads **Create key**, with *Step 1 of 2 · the secret appears on step 2 and is readable only there*.
+
+<Frame caption="Step 1: a name and a scope set">
+  <img src="/images/product/api-keys-create-scopes.png" alt="Create key form with a name, an acts-as choice, and the Send requests scope set selecting runs_write and runs_read" width="752" height="606" />
+</Frame>
+
+1. Enter a **Name**, 1 to 80 characters, for example `Production ticket router`. It is *a label for the console, not a credential*: name it after the process that will hold the key. Names do not have to be unique.
+2. Pick **Scopes**. A scope set ticks its scopes for you; **Custom** clears them so you tick your own. Ticking boxes by hand switches the set to Custom unless your ticks match a set exactly.
+3. Choose **+ Create key and show secret**. It reads **Creating…** while it works. **Cancel** returns to the list without creating anything.
+
+| Scope set | Scopes | Use it for |
+| --- | --- | --- |
+| **Send requests** (the default) | `runs_write`, `runs_read` | A service that sends decision runs and reads them back |
+| **Read only** | `runs_read`, `usage_read`, `billing_read` | Dashboards, reporting and spend alerts |
+| **Manage keys** | `keys_read`, `keys_write` | Automation that creates, lists and revokes keys |
+| **Custom** | Any of the six below | Anything else |
+
+The console offers six scopes. Each is described next to its checkbox:
+
+| Scope | Description in the console |
+| --- | --- |
+| `runs_write` | Send decision reads, which spend quota |
+| `runs_read` | Read back a run and its answers |
+| `keys_read` | List this workspace's keys, without secrets |
+| `keys_write` | Create and revoke keys |
+| `usage_read` | Read usage and quota |
+| `billing_read` | Read balance and transactions |
+
+A key cannot hold a scope your own role does not hold. The console does not offer `members_read`, `members_write` or `billing_write`; a key that needs `billing_write` to buy credit or change auto-recharge is created through the API. Give each key the fewest scopes it needs; see [API key security](/security/api-key-security) and [Scopes](/reference/scopes).
+
+### Step 2: copy the secret
+
+The next screen is the only time the secret is readable.
+
+<Frame caption="Step 2: the secret, shown once">
+  <img src="/images/product/api-keys-secret-shown-once.png" alt="Newly created key showing its secret once, with a Copy secret button and the key's id, prefix and scopes" width="752" height="567" />
+</Frame>
+
+1. Read the warning: **[!] Copy this secret now — it will not be shown again**. *Only the SHA-256 of this value is stored. Leave this page without copying it and the key is unusable: revoke it and create another.*
+2. Choose **Copy secret** next to `secret · shown once`. The button changes to **Copied**.
+3. Put the secret where your code reads it: a secret manager, or an environment variable on the server, never in source control or in browser code.
+4. Choose **I have copied it**. It stays disabled until you have copied the secret; hovering it says *Copy the secret first*.
+
+Below the secret the screen lists the key's **Name**, **Key ID**, **Prefix in the list** (*the only part shown again*) and **Scopes**, and a **test it** snippet.
+
+### Test the key
+
+The **test it** snippet sends one small decision run with the new key. Here it is in three languages. The key needs `runs_write`, and the run is charged to your organization like any other.
+
+<CodeGroup>
+
+```bash cURL
+export OPENTYPE_API_KEY="otsk_..."   # the secret you just copied
+
+curl -sS https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"decision","max_output_tokens":64,"state":"I want my money back.","questions":{"refund":{"type":"noul","instructions":"Is this a refund request?"}}}'
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Idempotency-Key": crypto.randomUUID(),
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    max_output_tokens: 64,
+    state: "I want my money back.",
+    questions: { refund: { type: "noul", instructions: "Is this a refund request?" } },
+  }),
+});
+const run = await res.json();
+if (!res.ok) throw new Error(`${run.error.code}: ${run.error.message}`);
+console.log("P(refund) =", run.decision.answers.refund.probability);
+```
+
+```python Python
+import os
+import uuid
+
+import requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Idempotency-Key": str(uuid.uuid4()),
+        "Content-Type": "application/json",
+    },
+    json={
+        "kind": "decision",
+        "max_output_tokens": 64,
+        "state": "I want my money back.",
+        "questions": {"refund": {"type": "noul", "instructions": "Is this a refund request?"}},
+    },
+    timeout=60,
+)
+run = res.json()
+res.raise_for_status()
+print("P(refund) =", run["decision"]["answers"]["refund"]["probability"])
+```
+
+</CodeGroup>
+
+A `200` with `"state": "completed"` means the key works. A `401 invalid_credential` means the secret was not copied whole: it must be `otsk_` plus exactly 64 hex characters. A `403 scope_denied` means the key lacks `runs_write`.
+
+## Read the keys table
+
+With at least one key, the page shows the **Keys** table (*revoked keys stay listed — the row is the audit trail*). The header counts them: *3 keys, 2 active and 1 revoked · a secret is shown once at creation and never again*. Keys are listed newest first, all on one page.
+
+<Frame caption="The keys table, with active and revoked keys">
+  <img src="/images/product/api-keys-populated.png" alt="API keys page listing four keys with their prefixes, scopes, last-used times and active or revoked state" width="1192" height="432" />
+</Frame>
+
+| Column | What it shows |
+| --- | --- |
+| **Name** | The name you gave it, with the key ID underneath |
+| **Prefix** | The first 13 characters of the secret, such as `otsk_fde66231…`. Match it against the start of a secret to find which key it is |
+| **Scopes** | One chip per scope |
+| **Created** | The creation date, such as `24 Sep 2026` (UTC) |
+| **Last used** | `Never used`, `just now`, `12 min ago`, `3 h ago`, or a date |
+| **State** | `active` or `revoked` |
+
+**Last used** is updated at most about once a minute per key, so a key in steady use can read a minute or so behind. A key that reads **Never used** long after you deployed it is either not deployed or not being sent.
+
+Below the table, **Use a key** (*keep it server-side*) repeats a `curl` example for `POST /v1/runs`.
+
+## Revoke a key
+
+Revoke a key when it may have leaked, when the process that held it is retired, or when you have replaced it. You need `keys_write`.
+
+<Frame caption="The revoke dialog">
+  <img src="/images/product/api-keys-revoke.png" alt="Revoke key dialog warning that the key stops working immediately and cannot be re-enabled" width="517" height="527" />
+</Frame>
+
+1. Choose **Revoke…** at the end of the key's row. Only active keys have it.
+2. The dialog asks **Revoke "Production ticket router"?** and warns: *otsk_fde66231… stops working on its next request. This cannot be undone; the row stays listed.*
+3. Choose **Revoke key** (it reads **Revoking…**), or **Cancel**.
+
+The key stops authenticating at once. Its next request gets `401 invalid_credential`, the same answer as for a secret that never existed. A revoked key cannot be turned back on or rotated: create a new one. Its row stays in the table, dimmed and marked `revoked`, as an audit trail; it is never deleted.
+
+If revoking fails, the dialog shows `[!] not revoked:` and the error code, and the key stays active.
+
+## Rotate a key
+
+The console has no rotate button. To replace a key's secret while keeping its ID, name and scopes, call `POST /v1/keys/{key_id}/rotate`: the old secret stops working the moment the new one is issued, with no overlap. To change keys without any gap, create a second key in the console, deploy it, then revoke the first. [Key rotation](/guides/key-rotation) covers both.
+
+## Do the same from code
+
+Everything on this page is also available through the API with a credential that holds `keys_read` or `keys_write`, for example a key created with the **Manage keys** set.
+
+<CodeGroup>
+
+```bash cURL
+# Create a key; the response carries "secret" once
+curl -sS https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ci-pipeline", "scopes": ["runs_write", "runs_read"]}'
+
+# List every key, revoked ones included
+curl -sS https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+
+# Revoke one by its key ID
+curl -sS -X DELETE https://api.opentype.dev/v1/keys/key_d92a9043204d41c09c78fc813d54ef06 \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const base = "https://api.opentype.dev/v1/keys";
+const auth = { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` };
+
+// Create a key; store created.secret now, it is never returned again
+const created = await fetch(base, {
+  method: "POST",
+  headers: { ...auth, "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "ci-pipeline", scopes: ["runs_write", "runs_read"] }),
+}).then((r) => r.json());
+
+// List every key, revoked ones included
+const { keys } = await fetch(base, { headers: auth }).then((r) => r.json());
+for (const k of keys) console.log(k.id, k.name, k.secret_prefix, k.state, k.last_used_at);
+
+// Revoke one by its key ID
+await fetch(`${base}/${created.id}`, { method: "DELETE", headers: auth });
+```
+
+```python Python
+import os
+
+import requests
+
+base = "https://api.opentype.dev/v1/keys"
+auth = {"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"}
+
+# Create a key; store created["secret"] now, it is never returned again
+created = requests.post(base, headers=auth, json={"name": "ci-pipeline", "scopes": ["runs_write", "runs_read"]}, timeout=30).json()
+
+# List every key, revoked ones included
+for k in requests.get(base, headers=auth, timeout=30).json()["keys"]:
+    print(k["id"], k["name"], k["secret_prefix"], k["state"], k["last_used_at"])
+
+# Revoke one by its key ID
+requests.delete(f"{base}/{created['id']}", headers=auth, timeout=30)
+```
+
+</CodeGroup>
+
+Creating a key answers `201`:
+
+```json
+{
+  "id": "key_d92a9043204d41c09c78fc813d54ef06",
+  "name": "ci-pipeline",
+  "principal": {"type": "user", "id": "user_example"},
+  "scopes": ["runs_read", "runs_write"],
+  "state": "active",
+  "secret_prefix": "otsk_fde66231",
+  "created_by": "user_example",
+  "created_at": "2026-09-24T10:12:03Z",
+  "last_used_at": null,
+  "revoked_at": null,
+  "secret": "otsk_..."
+}
+```
+
+Listing answers `{"keys": [...]}` with the same fields and no `secret`. Revoking answers `200` with the key in state `revoked` and its `revoked_at`; revoking it again returns the same record.
+
+## What goes wrong
+
+The create form shows a refusal under the scopes as `[!]` followed by the reason.
+
+| You see | What it means | What to do |
+| --- | --- | --- |
+| `A name is 1-80 characters.` | The name is empty or too long | Type a name of 1 to 80 characters |
+| `Pick at least one scope.` | No scope is ticked | Tick at least one, or pick a set |
+| `scope_exceeds_creator — the creating account does not hold the scope runs_write` | You ticked a scope your role does not hold | Untick it, or ask an owner or admin to create the key. See [scope_exceeds_creator](/problems/scope_exceeds_creator) |
+| `scope_denied` on the page or in the form | Your role lacks `keys_read` (to see keys) or `keys_write` (to create or revoke) | Ask an owner or admin. See [scope_denied](/problems/scope_denied) |
+| **Keys could not be read** with a status and code | The list could not be loaded | Reload. Look the code up in [Errors](/reference/errors) if it persists |
+| Your code gets `401 invalid_credential` | The secret is incomplete, mistyped or revoked | Check that the value is `otsk_` plus 64 hex characters and that the key is `active`. See [invalid_credential](/problems/invalid_credential) |
+| You lost the secret | It cannot be shown again | Create a new key, deploy it, then revoke the old one |
+| A secret was pasted into a chat, a ticket or a repository | Treat it as leaked | Revoke the key now, then create a replacement |
+
+## Related
+
+- [API key security](/security/api-key-security) - where to keep secrets, least-privilege scopes, and what to do after a leak.
+- [Key rotation](/guides/key-rotation) - replace a secret through the API, or swap keys with no downtime.
+- [Scopes](/reference/scopes) - every scope and the routes it unlocks.
+- [Authentication](/security/authentication) - how the API checks a key on each request.
+- [Quickstart](/getting-started/quickstart) - use your new key to send a first decision run.

@@ -1,0 +1,185 @@
+---
+title: "Yes/no questions (noul)"
+sidebarTitle: "Noul questions"
+description: "Ask a yes/no question with a noul, read the probability of yes, and turn it into an action with a threshold that matches what a mistake costs you."
+icon: "toggle-on"
+keywords: ["noul", "yes/no question", "binary question", "probability", "P(yes)", "threshold", "criteria"]
+---
+
+A `noul` question asks something that is either true or false about the state: is this ticket urgent, is this clause exclusive, is this message spam. Instead of a word, you get back the probability that the answer is yes. This page is for developers who gate an action on a yes/no judgement and need to decide where to draw the line.
+
+## The shape
+
+```json
+{
+  "type": "noul",
+  "instructions": "reply within the hour?",
+  "criteria": {
+    "true": "outage, data loss, double charge, or a threat to cancel",
+    "false": "anything that can wait for the normal queue"
+  }
+}
+```
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `type` | `"noul"` | yes | Marks this as a yes/no question. |
+| `instructions` | string | yes | The question itself. Phrase it so that "yes" is the case you act on. |
+| `criteria` | object | no | Describes what counts as yes (`true`) and as no (`false`). Send either key, both, or leave `criteria` out. |
+| `depends_on`, `ask_if`, `alone` | | no | Scheduling and gating. See [Conditional questions](/guides/conditional-questions). |
+
+A `noul` always has exactly two answers, named `yes` and `no`. You do not name them yourself, and they are the names other questions use in `ask_if` to depend on this one. Unknown keys inside a question are refused with `400 invalid_body`.
+
+Use `criteria` when the question alone leaves room for doubt. "Urgent" means different things to different teams; spelling out both sides tells the model where your boundary is.
+
+## Ask it
+
+This run asks one `noul` question about a support ticket.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-urgent" \
+  -d '{
+    "kind": "decision",
+    "instructions": "You triage customer support tickets.",
+    "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+    "questions": {
+      "urgent": {"type": "noul", "instructions": "reply within the hour?"}
+    },
+    "max_output_tokens": 16
+  }'
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4822-urgent",
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    instructions: "You triage customer support tickets.",
+    state: { ticket: "I was charged twice this month and nobody answers my emails.", plan: "pro" },
+    questions: {
+      urgent: { type: "noul", instructions: "reply within the hour?" },
+    },
+    max_output_tokens: 16,
+  }),
+});
+const run = await res.json();
+if (!res.ok) throw new Error(`${res.status} ${run.error.code} (${run.error.request_id})`);
+const urgent = run.decision.answers.urgent; // { type: "noul", probability: 0.83, ... }
+```
+
+```python Python
+import os
+import requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "ticket-4822-urgent",
+    },
+    json={
+        "kind": "decision",
+        "instructions": "You triage customer support tickets.",
+        "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+        "questions": {
+            "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+        },
+        "max_output_tokens": 16,
+    },
+    timeout=130,
+)
+run = res.json()
+if not res.ok:
+    raise RuntimeError(f"{res.status_code} {run['error']['code']} ({run['error']['request_id']})")
+urgent = run["decision"]["answers"]["urgent"]  # {"type": "noul", "probability": 0.83, ...}
+```
+
+</CodeGroup>
+
+## Read the answer
+
+In the ticket-triage run from the [decision runs guide](/guides/decision-runs), the `urgent` question came back as:
+
+```json
+{
+  "type": "noul",
+  "probability": 0.83,
+  "label_mass": 0.991,
+  "answered_within_labels": true
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `probability` | P(yes): the probability that the answer is yes, from 0 to 1. P(no) is `1 - probability`. |
+| `label_mass` | How much probability the model put on `yes` and `no` together before it was renormalised over them. Here 0.991: almost all of it. |
+| `answered_within_labels` | `true` when the single most likely token was `yes` or `no`. |
+
+So this ticket is urgent with probability 0.83. A `noul` answer has no `confidence` field and no `choice` field: `probability` is the whole answer. If you need a word, derive it yourself, and see the next section before you reach for 0.5.
+
+## Turn the probability into an action
+
+A probability is only useful once you compare it with a threshold, and the right threshold depends on what each kind of mistake costs you, not on the model.
+
+- **A false yes** is acting when you should not have: paging someone at night, blocking a legitimate payment.
+- **A false no** is not acting when you should have: a churn threat that waits a day, a fraud that goes through.
+
+When a false no is the expensive mistake, set the threshold low so more cases count as yes. When a false yes is the expensive one, set it high. There is no threshold that is right for every question, and 0.5 is only right when both mistakes cost the same.
+
+You do not have to choose between two outcomes. Two thresholds give you three bands: act automatically above the upper one, do nothing below the lower one, and send everything in between to a person.
+
+```ts
+// Pick the two thresholds from your own labelled data, not from this example.
+const ACT_ABOVE = Number(process.env.URGENT_ACT_ABOVE);
+const IGNORE_BELOW = Number(process.env.URGENT_IGNORE_BELOW);
+
+function route(urgent: { type: string; probability?: number; answered_within_labels?: boolean }) {
+  if (urgent.type !== "noul") return "human";           // skipped: its ask_if condition failed
+  if (urgent.answered_within_labels === false) return "human";
+  if (urgent.probability! >= ACT_ABOVE) return "escalate";
+  if (urgent.probability! < IGNORE_BELOW) return "normal_queue";
+  return "human";
+}
+```
+
+To choose the thresholds, run the question over a sample you have already labelled by hand, then pick the values that give an acceptable rate of each mistake on that sample. Re-check them whenever you change the `instructions` or the `criteria`: the wording moves the probabilities.
+
+### When to distrust the number
+
+- **`answered_within_labels: false`**: the model's most likely token was neither `yes` nor `no`. The probability is a renormalisation over two labels the model did not favour. Send the item to a person, whatever the probability says.
+- **A low `label_mass`**: most of the probability went elsewhere. Rephrase the question so that yes or no is a natural reply.
+- **Values that cluster around your threshold**: try `draws` from 2 to 8. With more than one draw, the run's `cost_basis` is `estimated`.
+
+## Write good noul questions
+
+- Ask one thing. "Is this urgent and about billing?" is two questions; split it into a `noul` and a [choice](/guides/choice-questions).
+- Make yes the actionable case, so a high probability always means "do something".
+- Put the definition in `criteria`, not in a longer `instructions` string. Keep `instructions` short.
+- When the answer has more than two outcomes, or an order, use a [choice](/guides/choice-questions) or a [score](/guides/score-questions) question instead of several `noul` questions.
+
+## What goes wrong
+
+| Status | Code | Cause | Fix |
+| --- | --- | --- | --- |
+| `400` | [`invalid_body`](/problems/invalid_body) | An unknown key in the question | Send only `type`, `instructions`, `criteria`, `depends_on`, `ask_if` and `alone`. |
+| `400` | [`invalid_decision_questions`](/problems/invalid_decision_questions) | Another question's `ask_if` names an answer other than `yes` or `no` for this question | Use `["yes"]`, `["no"]` or both. |
+| `503` | [`decision_unavailable`](/problems/decision_unavailable) | No route could serve the decision | Retry later with a new `Idempotency-Key`. |
+
+## Related
+
+- [Decision questions](/getting-started/decision-questions) - how noul, choice and score questions fit together.
+- [Decision runs](/guides/decision-runs) - every request field, the full response and the costs.
+- [Conditional questions](/guides/conditional-questions) - ask a question only when a noul came back yes.
+- [Playground](/console/playground) - try a noul question in the console with `+ noul`.
+- [invalid_decision_questions](/problems/invalid_decision_questions) - every reason a question set is refused.

@@ -1,0 +1,123 @@
+---
+title: "idempotency_key_required"
+description: "HTTP 400 on POST /v1/runs: the request has no Idempotency-Key header. Why the header is required and how to choose a key."
+icon: "fingerprint"
+keywords: ["idempotency_key_required", "Idempotency-Key", "400", "missing header", "POST /v1/runs", "idempotency"]
+---
+
+`idempotency_key_required` means a `POST /v1/runs` request arrived without an `Idempotency-Key` header. Read this page if you are writing your first run request, or if a client library strips custom headers.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `400` | `idempotency_key_required` | No. Add the header first. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+Every run must carry an `Idempotency-Key` header. The key lets OpenType recognise a retry of the same request and return the stored run instead of running and charging it twice. The request had no such header, so it was refused before a run existed. Nothing was stored and nothing was charged.
+
+This check runs after the credential is accepted, the body is parsed and the `runs_write` scope is confirmed. A request that fails one of those gets that error instead.
+
+## How to fix
+
+Send the header on every `POST /v1/runs`:
+
+| Rule | Value |
+| --- | --- |
+| Length | 1 to 255 bytes |
+| Characters | printable ASCII |
+| Scope | unique per organization |
+| Lifetime | never expires |
+
+Choose the key per logical request, not per HTTP attempt:
+
+- Derive it from your own business id, such as `ticket-4822-triage`. The same ticket and the same question always produce the same key.
+- Reuse that key when you retry the same request after a timeout or a dropped connection. If the first attempt produced a finished run, you get it back with `"replayed": true` and pay nothing more.
+- Use a new key after a 5xx or 504 that ended the run before the model answered. A replay of that key returns the stored `pending` run with `202` instead of running again. See [Error handling](/guides/error-handling).
+- Use a new key when you change the body. Reusing a key with a different body gets [`idempotency_conflict`](/problems/idempotency_conflict).
+
+This request was refused before a run existed, so any key is still free: add the header and send the same body again.
+
+## Example
+
+```json
+{"error":{"code":"idempotency_key_required","message":"the Idempotency-Key header is required","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+The same request with the header:
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-triage" \
+  -d '{
+    "kind": "decision",
+    "state": {"ticket": "I was charged twice this month."},
+    "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+    "max_output_tokens": 16
+  }'
+```
+
+```typescript TypeScript
+const ticketId = "4822";
+
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    // One key per logical request: the same ticket and question give the same key.
+    "Idempotency-Key": `ticket-${ticketId}-triage`,
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    state: { ticket: "I was charged twice this month." },
+    questions: { urgent: { type: "noul", instructions: "reply within the hour?" } },
+    max_output_tokens: 16,
+  }),
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+console.log(body.run_id, body.replayed);
+```
+
+```python Python
+import os
+import requests
+
+ticket_id = "4822"
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        # One key per logical request: the same ticket and question give the same key.
+        "Idempotency-Key": f"ticket-{ticket_id}-triage",
+    },
+    json={
+        "kind": "decision",
+        "state": {"ticket": "I was charged twice this month."},
+        "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+        "max_output_tokens": 16,
+    },
+    timeout=60,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+print(body["run_id"], body["replayed"])
+```
+</CodeGroup>
+
+## Related
+
+- [Idempotency](/guides/idempotency) - replays, conflicts, and when to mint a new key.
+- [invalid_idempotency_key](/problems/invalid_idempotency_key) - the header is present but not a valid key.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.
+- [Errors](/reference/errors) - the error envelope and the status families.

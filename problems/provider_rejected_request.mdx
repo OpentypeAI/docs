@@ -1,0 +1,128 @@
+---
+title: "provider_rejected_request"
+description: "HTTP 503 on POST /v1/runs: the model service refused a verdict request as invalid. Retry with a new key; if it repeats, report the request_id."
+icon: "ban"
+keywords: ["provider_rejected_request", "503", "provider", "model service", "verdict run", "POST /v1/runs"]
+---
+
+`provider_rejected_request` means the model service refused the call OpenType made for a verdict run. Read this page if a verdict run fails with this code.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `provider_rejected_request` | Once, with a new `Idempotency-Key`. If it repeats, report the `request_id`. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+Route detail: verdict runs only. For a decision run the same refusal answers [decision_unavailable](/problems/decision_unavailable).
+
+The model service refused the request as invalid, after your request had already passed OpenType's own checks. Neon 1.1 does not serve verdict runs; today every verdict run is refused earlier with [no_route_available](/problems/no_route_available).
+
+Every `provider_*` code has the same message, "the provider call failed". Branch on `code`, never on the message. The message never contains model output.
+
+If this was the first model call, the run was refused before the model served it. You are not charged, and the hold is released, but the run stays `pending`: a replay with the same `Idempotency-Key` returns `202` with `"state": "pending"`. If an earlier call in the same run was served (a verdict repair), the run is settled `failed` and a replay returns `200` with `"state": "failed"`. In both cases, retry with a new key.
+
+## How to fix
+
+- Retry once with a new `Idempotency-Key`.
+- If it repeats, report the `request_id`.
+
+## Example
+
+```json
+{"error":{"code":"provider_rejected_request","message":"the provider call failed","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+A retry loop with backoff and a new key per attempt:
+
+<CodeGroup>
+```bash curl
+BODY='{"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}'
+
+for attempt in 1 2 3 4; do
+  # A new Idempotency-Key per attempt: the failed run stays pending under the old key.
+  RESP=$(curl -sS -w '\n%{http_code}' https://api.opentype.dev/v1/runs \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -H "Idempotency-Key: $(uuidgen)" \
+    -d "$BODY")
+  STATUS=$(printf '%s' "$RESP" | tail -n1)
+  printf '%s\n' "$RESP" | sed '$d'
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # 500, 503, 504: back off, then try again
+    *) break ;;                        # success or 4xx: stop
+  esac
+done
+```
+
+```typescript TypeScript
+const body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16};
+
+async function createRunWithRetry(payload: unknown, maxAttempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch("https://api.opentype.dev/v1/runs", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "Content-Type": "application/json",
+        // A new key per attempt: the failed run stays pending under the old key.
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) return data;
+
+    const { code, message, request_id } = data.error;
+    console.error(`POST /v1/runs -> ${res.status} ${code}: ${message} (${request_id})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${request_id})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const run = await createRunWithRetry(body);
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}
+
+def create_run_with_retry(payload: dict, max_attempts: int = 4) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        resp = requests.post(
+            "https://api.opentype.dev/v1/runs",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                # A new key per attempt: the failed run stays pending under the old key.
+                "Idempotency-Key": str(uuid.uuid4()),
+            },
+            json=payload,
+            timeout=130,  # longer than the largest deadline_ms (120,000 ms)
+        )
+        data = resp.json()
+        if resp.ok:
+            return data
+
+        err = data["error"]
+        print(f"POST /v1/runs -> {resp.status_code} {err['code']}: {err['message']} ({err['request_id']})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{err['code']} ({err['request_id']})")
+        time.sleep(2 ** attempt)
+
+run = create_run_with_retry(body)
+```
+</CodeGroup>
+
+## Related
+
+- [Verdict runs](/guides/verdict-runs) - the verdict contract and its limits.
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Idempotency](/guides/idempotency) - when to reuse an `Idempotency-Key` and when to send a new one.
+- [Request ids](/reference/request-ids) - send your own `x-request-id` and quote it when you report a problem.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

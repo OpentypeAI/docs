@@ -1,0 +1,207 @@
+---
+title: "Choice questions"
+description: "Ask Neon 1.1 to pick one of 2 to 20 named options, and read the chosen option, a probability for every option, and a confidence."
+icon: "list-ul"
+keywords: ["choice", "classification", "options", "criteria", "probabilities", "confidence", "routing"]
+---
+
+A `choice` question picks one option from a list you define: which queue owns a ticket, which language a message is in, which product a review is about. You get back the chosen option, a probability for every option, and a confidence. This page is for developers who classify or route items and want to know how sure each classification is.
+
+## The shape
+
+```json
+{
+  "type": "choice",
+  "instructions": "which queue?",
+  "criteria": {
+    "billing": "payment problems",
+    "other": null
+  }
+}
+```
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `type` | `"choice"` | yes | Marks this as a choice question. |
+| `instructions` | string | yes | The question itself. |
+| `criteria` | object | yes | Maps each option name to a description, or to `null` when the name says it all. 2 to 20 options. |
+| `depends_on`, `ask_if`, `alone` | | no | Scheduling and gating. See [Conditional questions](/guides/conditional-questions). |
+
+The keys of `criteria` are the answer names. They come back in `choice` and as the keys of `probabilities`, and other questions use them in `ask_if` to depend on this one.
+
+### Option rules
+
+| Rule | Refusal |
+| --- | --- |
+| At least 2 and at most 20 options | `400 invalid_decision_questions`: `every question needs at least two and at most twenty alternatives` |
+| Option names unique within the question | `400 invalid_decision_questions`: `two alternatives of one question share a name` |
+| A description is a string or `null` | `400 invalid_body` |
+
+Admission does not check whether each option name works as a single token. A name that does not fails later with `503 decision_unavailable`. Keep names short, single, common words (`billing`, `technical`, `sales`, `other`) and put the detail in the description.
+
+### Include a way out
+
+When an item might fit none of your options, add one that catches it, such as `"other": null`. Without it, every item is forced into one of your real options, and the probabilities are spread only over those.
+
+## Ask it
+
+This run asks one `choice` question about a support ticket.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-bucket" \
+  -d '{
+    "kind": "decision",
+    "instructions": "You triage customer support tickets.",
+    "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+    "questions": {
+      "bucket": {"type": "choice", "instructions": "which queue?",
+                 "criteria": {"billing": "payment problems", "other": null}}
+    },
+    "max_output_tokens": 16
+  }'
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4822-bucket",
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    instructions: "You triage customer support tickets.",
+    state: { ticket: "I was charged twice this month and nobody answers my emails.", plan: "pro" },
+    questions: {
+      bucket: {
+        type: "choice",
+        instructions: "which queue?",
+        criteria: { billing: "payment problems", other: null },
+      },
+    },
+    max_output_tokens: 16,
+  }),
+});
+const run = await res.json();
+if (!res.ok) throw new Error(`${res.status} ${run.error.code} (${run.error.request_id})`);
+const bucket = run.decision.answers.bucket; // { type: "choice", choice: "billing", ... }
+```
+
+```python Python
+import os
+import requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "ticket-4822-bucket",
+    },
+    json={
+        "kind": "decision",
+        "instructions": "You triage customer support tickets.",
+        "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+        "questions": {
+            "bucket": {
+                "type": "choice",
+                "instructions": "which queue?",
+                "criteria": {"billing": "payment problems", "other": None},
+            },
+        },
+        "max_output_tokens": 16,
+    },
+    timeout=130,
+)
+run = res.json()
+if not res.ok:
+    raise RuntimeError(f"{res.status_code} {run['error']['code']} ({run['error']['request_id']})")
+bucket = run["decision"]["answers"]["bucket"]  # {"type": "choice", "choice": "billing", ...}
+```
+
+</CodeGroup>
+
+## Read the answer
+
+In the ticket-triage run from the [decision runs guide](/guides/decision-runs), the `bucket` question came back as:
+
+```json
+{
+  "type": "choice",
+  "choice": "billing",
+  "probabilities": {"billing": 0.71, "other": 0.29},
+  "confidence": 0.71,
+  "label_mass": 0.964,
+  "answered_within_labels": true
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `choice` | The chosen option, one of your `criteria` keys. |
+| `probabilities` | A probability for every option, keyed by option name, from 0 to 1. |
+| `confidence` | The confidence the read reports for `choice`, from 0 to 1. |
+| `label_mass` | How much probability the model put on your option names together before it was renormalised over them. |
+| `answered_within_labels` | `true` when the single most likely token was one of your option names. |
+
+So the ticket goes to `billing`, with 0.71 on billing and 0.29 on everything else.
+
+## Use the probabilities, not just the choice
+
+`choice` alone throws away how close the call was. A ticket at 0.71 billing and one at 0.99 billing both say `"choice": "billing"`, but only one of them is safe to route without a second look.
+
+```python
+import os
+
+# Choose the floor from your own labelled data: the confidence below which
+# misrouted items cost you more than a human review does.
+AUTO_ROUTE_FLOOR = float(os.environ["BUCKET_AUTO_ROUTE_FLOOR"])
+
+def route(bucket: dict) -> str:
+    if bucket["type"] != "choice":            # skipped: its ask_if condition failed
+        return "review"
+    if bucket.get("answered_within_labels") is False:
+        return "review"
+    if bucket["confidence"] < AUTO_ROUTE_FLOOR:
+        return "review"
+    return bucket["choice"]
+```
+
+Other patterns that use `probabilities` directly:
+
+- **Act on one option only.** When only one option triggers an action, compare that option's probability with its own threshold, rather than waiting for it to win.
+- **Top two.** When the two highest probabilities are close, show both to the reviewer.
+- **Watch `other`.** A rising share of items where `other` wins tells you your options no longer cover your traffic.
+
+When many items land near your floor, try `draws` from 2 to 8. With more than one draw, the run's `cost_basis` is `estimated`.
+
+## Choice or several noul questions
+
+| Use | When |
+| --- | --- |
+| One `choice` | The options exclude each other: a ticket belongs to exactly one queue. |
+| Several [`noul`](/guides/noul-questions) questions | The options can all be true at once: a ticket can mention both billing and a bug. |
+| A [`score`](/guides/score-questions) | The options have an order: calm, annoyed, furious. |
+
+## What goes wrong
+
+| Status | Code | Cause | Fix |
+| --- | --- | --- | --- |
+| `400` | [`invalid_decision_questions`](/problems/invalid_decision_questions) | Fewer than 2 or more than 20 options, or two options with the same name | Keep 2 to 20 distinct options. |
+| `400` | [`invalid_decision_questions`](/problems/invalid_decision_questions) | Another question's `ask_if` names an option this question does not have | Use option names from this question's `criteria`. |
+| `400` | [`invalid_body`](/problems/invalid_body) | `criteria` is missing or is not an object, or the question has an unknown key | Send `criteria` as an object of option name to description or `null`. |
+| `503` | [`decision_unavailable`](/problems/decision_unavailable) | An option name does not work as a label, or no route could serve the decision | Shorten the option names; otherwise retry later with a new `Idempotency-Key`. |
+
+## Related
+
+- [Decision questions](/getting-started/decision-questions) - how noul, choice and score questions fit together.
+- [Decision runs](/guides/decision-runs) - every request field, the full response and the costs.
+- [Conditional questions](/guides/conditional-questions) - ask a follow-up only for one option.
+- [Playground](/console/playground) - try a choice question in the console with `+ choice`.
+- [Limits](/reference/limits) - the per-request limits that apply to every run.

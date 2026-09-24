@@ -2,7 +2,7 @@
   "$schema": "https://mintlify.com/docs.json",
   "theme": "sequoia",
   "name": "OpenType",
-  "description": "One model call per run. You send a JSON Schema or a set of typed questions; OpenType routes, calls one model, validates, and returns the answer.",
+  "description": "OpenType answers typed questions about your data in one model call per run. Send a state and a set of questions; get calibrated answers back.",
   "colors": {
     "primary": "#0A7A3B",
     "light": "#2DEC80",
@@ -11,7 +11,7 @@
   "logo": {
     "light": "/logo/light.svg",
     "dark": "/logo/dark.svg",
-    "href": "https://opentype.dev"
+    "href": "https://docs.opentype.dev"
   },
   "favicon": "/favicon.svg",
   "fonts": {
@@ -25,8 +25,11 @@
   "appearance": {
     "default": "system"
   },
-  "icons": {
-    "library": "lucide"
+  "background": {
+    "color": {
+      "light": "#F7F7F4",
+      "dark": "#090A09"
+    }
   },
   "styling": {
     "codeblocks": "system"
@@ -40,7 +43,7 @@
     ],
     "primary": {
       "type": "button",
-      "label": "Get an API key",
+      "label": "Get API key",
       "href": "https://console.opentype.dev/keys"
     }
   },
@@ -49,57 +52,249 @@
       "anchors": [
         {
           "anchor": "Changelog",
-          "icon": "history",
-          "href": "/changelog"
+          "icon": "clock-rotate-left",
+          "href": "/reference/changelog"
         }
       ]
     },
     "tabs": [
       {
-        "tab": "Documentation",
+        "tab": "Get started",
+        "icon": "rocket",
+        "groups": [
+          {
+            "group": "Welcome",
+            "icon": "star",
+            "pages": [
+              "index",
+              "getting-started/quickstart",
+              "getting-started/create-an-account"
+            ]
+          },
+          {
+            "group": "Core concepts",
+            "icon": "lightbulb",
+            "pages": [
+              "getting-started/runs",
+              "getting-started/decision-questions",
+              "getting-started/models-and-pricing",
+              "getting-started/organizations-and-roles"
+            ]
+          },
+          {
+            "group": "Help",
+            "icon": "life-ring",
+            "pages": [
+              "getting-started/troubleshooting",
+              "getting-started/faq",
+              "getting-started/glossary"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Console",
+        "icon": "desktop",
+        "groups": [
+          {
+            "group": "Overview",
+            "icon": "compass",
+            "pages": [
+              "console/index",
+              "console/sign-in"
+            ]
+          },
+          {
+            "group": "Workspace",
+            "icon": "table-columns",
+            "pages": [
+              "console/playground",
+              "console/api-keys",
+              "console/usage",
+              "console/billing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Guides",
         "icon": "book-open",
         "groups": [
           {
-            "group": "Get started",
+            "group": "Overview",
+            "icon": "compass",
             "pages": [
-              "introduction",
-              "quickstart",
-              "authentication"
+              "guides/index"
             ]
           },
           {
-            "group": "Concepts",
-            "pages": [
-              "concepts"
-            ]
-          },
-          {
-            "group": "Guides",
+            "group": "Decision runs",
+            "icon": "list-check",
             "pages": [
               "guides/decision-runs",
-              "guides/streaming"
+              "guides/noul-questions",
+              "guides/choice-questions",
+              "guides/score-questions",
+              "guides/conditional-questions",
+              "guides/verdict-runs"
             ]
           },
           {
-            "group": "Account",
+            "group": "Reliable requests",
+            "icon": "arrows-rotate",
             "pages": [
-              "usage-and-quotas",
-              "billing-and-credits",
-              "rate-limits"
+              "guides/idempotency",
+              "guides/error-handling",
+              "guides/polling",
+              "guides/streaming",
+              "guides/pagination"
             ]
           },
           {
-            "group": "Reference",
+            "group": "Spend and billing",
+            "icon": "credit-card",
             "pages": [
-              "errors",
-              "changelog"
+              "guides/credits-and-billing",
+              "guides/auto-recharge",
+              "guides/handling-insufficient-credits",
+              "guides/usage-reporting",
+              "guides/spend-limits-and-quotas"
+            ]
+          },
+          {
+            "group": "Go to production",
+            "icon": "gear",
+            "pages": [
+              "guides/key-rotation",
+              "guides/production-checklist",
+              "guides/code-examples"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Security",
+        "icon": "shield-halved",
+        "groups": [
+          {
+            "group": "Overview",
+            "icon": "compass",
+            "pages": [
+              "security/index"
+            ]
+          },
+          {
+            "group": "Access",
+            "icon": "key",
+            "pages": [
+              "security/authentication",
+              "security/api-key-security",
+              "security/scopes-and-roles"
+            ]
+          },
+          {
+            "group": "Data",
+            "icon": "lock",
+            "pages": [
+              "security/data-handling"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "icon": "book",
+        "groups": [
+          {
+            "group": "Overview",
+            "icon": "compass",
+            "pages": [
+              "reference/index",
+              "reference/conventions",
+              "reference/request-ids",
+              "reference/scopes"
+            ]
+          },
+          {
+            "group": "Errors",
+            "icon": "triangle-exclamation",
+            "pages": [
+              "reference/errors",
+              {
+                "group": "Problem codes",
+                "icon": "list",
+                "root": "problems/index",
+                "expanded": false,
+                "pages": [
+                  "problems/invalid_body",
+                  "problems/idempotency_key_required",
+                  "problems/invalid_idempotency_key",
+                  "problems/invalid_run_id",
+                  "problems/invalid_verdict_schema",
+                  "problems/invalid_decision_questions",
+                  "problems/unknown_model",
+                  "problems/invalid_parameter",
+                  "problems/invalid_amount",
+                  "problems/empty_scopes",
+                  "problems/secret_in_path",
+                  "problems/malformed_key_id",
+                  "problems/missing_credentials",
+                  "problems/invalid_credential",
+                  "problems/insufficient_credits",
+                  "problems/no_active_organization",
+                  "problems/scope_denied",
+                  "problems/scope_exceeds_creator",
+                  "problems/principal_is_not_the_caller",
+                  "problems/run_not_found",
+                  "problems/key_not_found",
+                  "problems/idempotency_conflict",
+                  "problems/key_revoked",
+                  "problems/body_too_large",
+                  "problems/input_too_large",
+                  "problems/organization_spend_quota_exhausted",
+                  "problems/organization_token_quota_exhausted",
+                  "problems/internal_error",
+                  "problems/no_route_available",
+                  "problems/decision_unavailable",
+                  "problems/budget_exhausted",
+                  "problems/verdict_schema_violation",
+                  "problems/catalog_unavailable",
+                  "problems/provider_unauthorized",
+                  "problems/provider_rate_limited",
+                  "problems/provider_rejected_request",
+                  "problems/provider_unavailable",
+                  "problems/provider_malformed_response",
+                  "problems/not_configured",
+                  "problems/database_unavailable",
+                  "problems/database_not_configured",
+                  "problems/billing_not_configured",
+                  "problems/stripe_unavailable",
+                  "problems/auth_not_configured",
+                  "problems/trust_keys_unavailable",
+                  "problems/deadline_exceeded"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Limits",
+            "icon": "gauge",
+            "pages": [
+              "reference/limits"
+            ]
+          },
+          {
+            "group": "Release notes",
+            "icon": "clock-rotate-left",
+            "pages": [
+              "reference/changelog"
             ]
           }
         ]
       },
       {
         "tab": "API reference",
-        "icon": "square-terminal",
+        "icon": "code",
         "openapi": {
           "source": "api-reference/openapi.json",
           "overlays": [
@@ -109,12 +304,14 @@
         "groups": [
           {
             "group": "Overview",
+            "icon": "compass",
             "pages": [
               "api-reference/introduction"
             ]
           },
           {
             "group": "Runs",
+            "icon": "play",
             "pages": [
               "POST /v1/runs",
               "GET /v1/runs",
@@ -124,6 +321,7 @@
           },
           {
             "group": "API keys",
+            "icon": "key",
             "pages": [
               "POST /v1/keys",
               "GET /v1/keys",
@@ -134,24 +332,28 @@
           },
           {
             "group": "Usage and quota",
+            "icon": "chart-line",
             "pages": [
               "GET /v1/usage",
+              "GET /v1/usage/daily",
               "GET /v1/usage/ledger",
               "GET /v1/usage/runs/{run_id}",
               "GET /v1/quota"
             ]
           },
           {
-            "group": "Members",
+            "group": "Billing",
+            "icon": "credit-card",
             "pages": [
-              "GET /v1/members",
-              "POST /v1/members/invitations",
-              "PATCH /v1/members/{member_id}",
-              "DELETE /v1/members/{member_id}"
+              "GET /v1/billing",
+              "POST /v1/billing/checkout",
+              "POST /v1/billing/portal",
+              "PUT /v1/billing/auto-recharge"
             ]
           },
           {
             "group": "Health",
+            "icon": "heart-pulse",
             "pages": [
               "GET /healthz",
               "GET /readyz"
@@ -182,46 +384,133 @@
     "options": [
       "copy",
       "view",
-      "claude",
       "chatgpt",
-      "cursor",
-      "mcp"
+      "claude"
     ]
   },
-  "seo": {
-    "indexing": "navigable"
-  },
   "search": {
-    "prompt": "Search runs, schemas, errors..."
+    "prompt": "Search runs, questions, keys and error codes..."
+  },
+  "seo": {
+    "indexing": "navigable",
+    "metatags": {
+      "og:site_name": "OpenType Docs",
+      "twitter:card": "summary_large_image"
+    }
   },
   "errors": {
     "404": {
       "redirect": false,
       "title": "Page not found",
-      "description": "Try the [quickstart](/quickstart) or the [API reference](/api-reference/introduction)."
+      "description": "That path is not in the OpenType docs. Try the [quickstart](/getting-started/quickstart) or the [API reference](/api-reference/introduction). If an error code sent you here, the [problem catalog](/problems) explains it."
     }
   },
   "footer": {
+    "socials": {
+      "github": "https://github.com/OpentypeAI"
+    },
     "links": [
+      {
+        "header": "Docs",
+        "items": [
+          {
+            "label": "Quickstart",
+            "href": "/getting-started/quickstart"
+          },
+          {
+            "label": "Guides",
+            "href": "/guides"
+          },
+          {
+            "label": "API reference",
+            "href": "/api-reference/introduction"
+          },
+          {
+            "label": "Problem codes",
+            "href": "/problems"
+          }
+        ]
+      },
+      {
+        "header": "Console",
+        "items": [
+          {
+            "label": "Playground",
+            "href": "https://console.opentype.dev/playground"
+          },
+          {
+            "label": "API keys",
+            "href": "https://console.opentype.dev/keys"
+          },
+          {
+            "label": "Usage",
+            "href": "https://console.opentype.dev/usage"
+          },
+          {
+            "label": "Billing",
+            "href": "https://console.opentype.dev/billing"
+          }
+        ]
+      },
       {
         "header": "OpenType",
         "items": [
           {
-            "label": "Console",
-            "href": "https://console.opentype.dev"
+            "label": "Changelog",
+            "href": "/reference/changelog"
           },
           {
-            "label": "Home",
-            "href": "https://opentype.dev"
+            "label": "Security",
+            "href": "/security"
+          },
+          {
+            "label": "GitHub",
+            "href": "https://github.com/OpentypeAI"
           }
         ]
       }
     ]
   },
-  "background": {
-    "color": {
-      "light": "#F7F7F4",
-      "dark": "#090A09"
+  "redirects": [
+    {
+      "source": "/introduction",
+      "destination": "/"
+    },
+    {
+      "source": "/getting-started/introduction",
+      "destination": "/"
+    },
+    {
+      "source": "/quickstart",
+      "destination": "/getting-started/quickstart"
+    },
+    {
+      "source": "/concepts",
+      "destination": "/getting-started/runs"
+    },
+    {
+      "source": "/authentication",
+      "destination": "/security/authentication"
+    },
+    {
+      "source": "/usage-and-quotas",
+      "destination": "/guides/usage-reporting"
+    },
+    {
+      "source": "/billing-and-credits",
+      "destination": "/guides/credits-and-billing"
+    },
+    {
+      "source": "/rate-limits",
+      "destination": "/reference/limits"
+    },
+    {
+      "source": "/errors",
+      "destination": "/reference/errors"
+    },
+    {
+      "source": "/changelog",
+      "destination": "/reference/changelog"
     }
-  }
+  ]
 }

@@ -1,0 +1,55 @@
+---
+title: "Reference"
+description: "The rules every OpenType API request follows: conventions, request ids, scopes, errors, problem codes, limits, and the changelog."
+icon: "book"
+keywords: ["reference", "api conventions", "error codes", "limits", "scopes", "changelog"]
+---
+
+This tab is the lookup layer of the documentation. Come here when you already know what you are building and need an exact answer: the format of an id, the scope a route demands, what a status code means, how large a question set may be, or what changed in the API. The guides explain how to do things; these pages state the rules they rely on.
+
+<CardGroup cols={2}>
+  <Card title="Conventions" icon="ruler-combined" href="/reference/conventions">
+    Base URL, JSON rules, id formats, timestamps, time windows, micro-USD amounts, and CORS.
+  </Card>
+  <Card title="Request ids" icon="fingerprint" href="/reference/request-ids">
+    The `x-request-id` header: sending your own, reading it back, and quoting it when you report an issue.
+  </Card>
+  <Card title="Scopes" icon="key" href="/reference/scopes">
+    Which scope each route demands, and which scopes each organization role holds.
+  </Card>
+  <Card title="Errors" icon="triangle-exclamation" href="/reference/errors">
+    The error envelope, what each HTTP status means, plain-text rejections, and how to retry safely.
+  </Card>
+  <Card title="Problem codes" icon="list" href="/problems">
+    Every error code, its HTTP status, whether a retry can help, and the page that explains it.
+  </Card>
+  <Card title="Limits" icon="gauge-high" href="/reference/limits">
+    Body size, question and schema bounds, deadlines, spend ceilings, list sizes, and period quotas.
+  </Card>
+  <Card title="Changelog" icon="clock-rotate-left" href="/reference/changelog">
+    Dated changes to the API contract.
+  </Card>
+  <Card title="API reference" icon="square-terminal" href="/api-reference/introduction">
+    Every endpoint, generated from the OpenAPI document the server publishes.
+  </Card>
+</CardGroup>
+
+## At a glance
+
+| | |
+| --- | --- |
+| Base URL | `https://api.opentype.dev`, every route under `/v1` |
+| Authentication | `Authorization: Bearer otsk_...` on every `/v1` route |
+| Bodies | JSON, snake_case field names, unknown fields refused, 1 MiB at most |
+| Money | integers in micro-USD: 1,000,000 is $1 |
+| Timestamps | `YYYY-MM-DDTHH:MM:SSZ`, UTC, second precision |
+| Errors | `{"error": {"code", "message", "request_id"}}`; branch on `code` |
+| Request id | `x-request-id` on every response |
+| Model | Neon 1.1, API ids `neon-1.1` and `neon-latest` |
+
+## Related
+
+- [Quickstart](/getting-started/quickstart) - send your first run before you need the rules.
+- [Error handling](/guides/error-handling) - turn the error rules into client code.
+- [Scopes and roles](/security/scopes-and-roles) - choose the least privilege a key needs.
+- [API reference](/api-reference/introduction) - request and response schemas for every endpoint.

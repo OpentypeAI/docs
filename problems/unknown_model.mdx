@@ -1,0 +1,116 @@
+---
+title: "unknown_model"
+description: "HTTP 400 on POST /v1/runs: a decision run named a model other than neon-1.1 or neon-latest. Which model ids are accepted and how to fix it."
+icon: "microchip"
+keywords: ["unknown_model", "400", "model", "neon-1.1", "neon-latest", "Neon 1.1", "decision run"]
+---
+
+`unknown_model` means a decision run set the optional `model` field to a value OpenType does not serve. Read this page if you pin a model id in your requests.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `400` | `unknown_model` | No. Fix the model id first. |
+
+## What happened
+
+Route: `POST /v1/runs` with `"kind": "decision"`.
+
+Decision runs accept an optional `model` field. OpenType serves one model, Neon 1.1, under two ids:
+
+| `model` | Meaning |
+| --- | --- |
+| `neon-1.1` | Neon 1.1, pinned |
+| `neon-latest` | Neon 1.1 |
+| omitted | Neon 1.1 |
+
+The request named something else, such as a misspelled id or another vendor's model name. The run was refused before it existed. Nothing was stored and nothing was charged.
+
+## How to fix
+
+- Set `model` to `neon-1.1` or `neon-latest`, or leave it out.
+- Copy the id exactly as written here: `neon-1.1` or `neon-latest`.
+- Send the corrected request. It was refused before a run existed, so you may keep the same `Idempotency-Key`.
+
+A live decision response reports the model that answered in `decision.model`, which reads `neon-1.1`.
+
+## Example
+
+The message text is not fixed. Branch on `code`.
+
+```json
+{"error":{"code":"unknown_model","message":"...","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+A decision run that pins the model:
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-triage" \
+  -d '{
+    "kind": "decision",
+    "model": "neon-1.1",
+    "state": {"ticket": "I was charged twice this month."},
+    "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+    "max_output_tokens": 16
+  }'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4822-triage",
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    model: "neon-1.1", // or "neon-latest", or omit
+    state: { ticket: "I was charged twice this month." },
+    questions: { urgent: { type: "noul", instructions: "reply within the hour?" } },
+    max_output_tokens: 16,
+  }),
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code} (${body.error.request_id})`);
+console.log(body.decision.model); // "neon-1.1"
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "ticket-4822-triage",
+    },
+    json={
+        "kind": "decision",
+        "model": "neon-1.1",  # or "neon-latest", or omit
+        "state": {"ticket": "I was charged twice this month."},
+        "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+        "max_output_tokens": 16,
+    },
+    timeout=60,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']} ({body['error']['request_id']})")
+print(body["decision"]["model"])  # "neon-1.1"
+```
+</CodeGroup>
+
+## Related
+
+- [Models and pricing](/getting-started/models-and-pricing) - Neon 1.1, its ids and its prices.
+- [Decision runs](/guides/decision-runs) - every field of a decision request.
+- [invalid_body](/problems/invalid_body) - other fields that do not fit the run contract.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

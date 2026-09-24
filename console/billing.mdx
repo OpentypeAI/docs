@@ -1,0 +1,222 @@
+---
+title: "Billing in the console"
+sidebarTitle: "Billing"
+description: "Check your credit balance, add funds from $5 to $1,000, set auto-recharge, open cards and receipts, and read transactions on the console's Billing page."
+icon: "credit-card"
+keywords: ["billing", "balance", "add funds", "credits", "auto-recharge", "receipts", "invoices", "payment method", "transactions", "console"]
+---
+
+The **Billing** page is where you see your organization's prepaid credit balance, add funds, turn on auto-recharge, manage saved cards and receipts, and read recent purchases, grants and daily usage. Read it when you are about to run out of credit, when a run was refused with `402 insufficient_credits`, or when you need a receipt.
+
+Open it at [console.opentype.dev/billing](https://console.opentype.dev/billing). Reading the page needs `billing_read`, which every role holds. Adding funds, changing auto-recharge and opening cards and receipts need `billing_write`, which owners, admins and the billing role hold.
+
+## How credit works
+
+OpenType is prepaid, in US dollars. Every run is charged against your organization's balance.
+
+- A new account's organization gets **$5 of free credit** once its email address is verified, one grant per email address. See [Create an account](/getting-started/create-an-account).
+- While a run is in flight it holds up to its ceiling of $0.005. When it settles, the hold is replaced by what it actually cost, which for a decision run is usually a small fraction of a cent.
+- A run can start only while the balance covers that hold. Otherwise `POST /v1/runs` refuses it with `402 insufficient_credits`, and nothing is charged.
+
+[Credits and billing](/guides/credits-and-billing) explains holds and settlement in full.
+
+## Balance
+
+The **Balance** panel shows the balance in dollars, for example `$24.98`, and its meta says whether a card is saved: `card on file` or `no card on file`.
+
+The balance is *credits, less settled spend, less what in-flight runs still hold*. Two notes can appear under it:
+
+- *New runs are refused with 402 until funds are added.* when the balance is zero or below.
+- *Below the auto-recharge threshold; a recharge is due.* when auto-recharge is on and the balance is under its threshold.
+
+The same balance appears in the sidebar under your organization's name.
+
+## Add funds
+
+<Steps>
+  <Step title="Enter an amount">
+    In the **Balance** panel, type an amount in dollars. It starts at `20`. Any amount from $5 to $1,000 in whole cents is accepted.
+  </Step>
+  <Step title="Choose Add funds">
+    The console sends you to a secure Stripe checkout page for that amount. The line item reads **OpenType credits**.
+  </Step>
+  <Step title="Pay on Stripe">
+    Pay with a card. Paying also saves the card, which auto-recharge can then use. If you cancel, nothing is charged.
+  </Step>
+  <Step title="Come back to Billing">
+    Stripe returns you to the Billing page either way. The credit is added once Stripe confirms the payment, not before; reload if the balance has not moved yet. A **purchase** row, *Credit purchase*, appears in **Transactions**.
+  </Step>
+</Steps>
+
+## Cards, receipts and invoices
+
+The button at the foot of the **Balance** panel opens the Stripe billing portal for your organization. It reads **Cards, receipts and invoices** when a card is saved, and **Add a payment method** when none is. In the portal you can add or replace the saved card and download receipts and invoices for your purchases. Closing the portal returns you to the Billing page.
+
+## Auto-recharge
+
+Auto-recharge buys credit for you when the balance runs low, so production traffic is not refused with `402`.
+
+1. In the **Auto-recharge** panel, tick **Recharge the card on file when the balance runs low**.
+2. Set **When below, $**: the balance under which a recharge is made. It starts at `10`.
+3. Set **Buy, $**: how much to buy each time. It starts at `50`.
+4. Choose **Save**. The page confirms with *Auto-recharge saved.*, and the panel's meta reads `on`.
+
+Both amounts must be between $5 and $1,000, in whole cents. Auto-recharge charges the saved card without asking, so it needs a card on file: add funds once, or add a card through **Add a payment method**. To turn it off, untick the box and choose **Save**.
+
+How it behaves:
+
+- The balance is checked after each run is admitted and after each `402` refusal. When it is below **When below**, the card is charged **Buy**.
+- At most one recharge is made per organization per hour. A burst of traffic that spends more than **Buy** within an hour can still reach `402`, so size **Buy** for an hour of your peak spend.
+- The credit lands when the payment succeeds, as a **purchase** row reading *Auto-recharge*.
+
+See [Auto-recharge](/guides/auto-recharge) for sizing and failure handling.
+
+## Transactions
+
+**Transactions** lists the last 50 movements of credit, newest first. Its meta reads, for example, `newest first · last 12`.
+
+| Column | What it shows |
+| --- | --- |
+| **Date, UTC** | When it happened, such as `2026-09-20 14:02` |
+| **Kind** | `purchase`, `grant`, `usage`, `refund` or `adjustment` |
+| **Description** | *Credit purchase*, *Auto-recharge*, *Usage on 2026-09-24*, and so on |
+| **Amount** | Credit added, such as `+$25.00`, or taken, such as `-$0.02` |
+
+| Kind | What it is |
+| --- | --- |
+| `purchase` | Credit you bought with **Add funds** or auto-recharge |
+| `grant` | Free credit, such as the $5 sign-up credit |
+| `usage` | One row per UTC day with runs, dated 00:00 that day, for what the day's runs cost |
+| `refund` | Credit returned to you |
+| `adjustment` | A correction to the balance |
+
+Usage is booked as one row per day, not one per run. For the cost of a single run, use the request log on [Usage](/console/usage). Before anything has happened, the list reads **No transaction yet**: *Purchases, grants and settled usage appear here.*
+
+## Billing is not switched on here
+
+On a deployment with no payment processor connected, the page shows a single panel instead:
+
+> **Billing is not switched on here**
+> No payment processor is connected to this deployment, so there is no balance, card or invoice to show, and none is invented here.
+
+Its code is `billing_not_configured` and its status 503. Nothing on your side will fix it; runs are not refused for credit there. If the balance could not be read for another reason, the panel reads **The billing account could not be read**, with the code and message, and *the balance is withheld rather than shown as zero*.
+
+## What goes wrong
+
+Refusals appear at the top of the page as `[!]` followed by the code and a sentence.
+
+| You see | What it means | What to do |
+| --- | --- | --- |
+| `[!] amount_out_of_range` *Amounts are between $5 and $1,000, in whole cents.* | The amount, or an auto-recharge amount, is out of bounds or has fractions of a cent | Enter a whole-cent amount from 5 to 1000 |
+| `[!] scope_denied` *Your role cannot change billing. An owner or admin can.* | Your role lacks `billing_write` | Ask an owner, an admin, or someone with the billing role |
+| `[!] billing_not_configured` | No payment processor is connected to this deployment | Nothing on your side will fix it |
+| `[!] stripe_unavailable` | The payment provider did not answer | Try again in a moment. You were not charged |
+| `[!] invalid_amount` | The API refused an amount the page let through | Check both auto-recharge amounts. See [invalid_amount](/problems/invalid_amount) |
+| The balance did not change after paying | Stripe has not confirmed the payment yet | Reload in a few seconds. If it has not moved after a few minutes, check **Cards, receipts and invoices** for the payment |
+| Runs refused with `402 insufficient_credits` | The balance does not cover a run's hold | Add funds or turn on auto-recharge; the same request can be retried with its idempotency key. See [Handling insufficient credits](/guides/handling-insufficient-credits) |
+
+## Do the same from code
+
+Every control on this page is one API route. Reading needs `billing_read`; the rest needs `billing_write`, which a key can hold only if it was created through the API by someone whose role has it.
+
+| Control | Route |
+| --- | --- |
+| Balance, auto-recharge settings, transactions | `GET /v1/billing` |
+| **Add funds** | `POST /v1/billing/checkout` with `{"amount_micros": …}`, returns `checkout_url` |
+| **Cards, receipts and invoices** | `POST /v1/billing/portal`, returns `portal_url` |
+| **Auto-recharge**, **Save** | `PUT /v1/billing/auto-recharge` |
+
+Amounts are integer micro-USD: $25 is `25000000`, and $5 to $1,000 is `5000000` to `1000000000`.
+
+<CodeGroup>
+
+```bash cURL
+# Balance and the last 50 transactions
+curl -sS https://api.opentype.dev/v1/billing \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+
+# Start a $25 purchase; open the returned checkout_url in a browser to pay
+curl -sS https://api.opentype.dev/v1/billing/checkout \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"amount_micros": 25000000}'
+
+# Buy $50 whenever the balance drops below $10
+curl -sS -X PUT https://api.opentype.dev/v1/billing/auto-recharge \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "threshold_micros": 10000000, "amount_micros": 50000000}'
+```
+
+```ts TypeScript
+const base = "https://api.opentype.dev/v1/billing";
+const auth = { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` };
+
+const billing = await fetch(base, { headers: auth }).then((r) => r.json());
+console.log(`balance $${billing.balance_micros / 1e6}`, billing.auto_recharge);
+
+const { checkout_url } = await fetch(`${base}/checkout`, {
+  method: "POST",
+  headers: { ...auth, "Content-Type": "application/json" },
+  body: JSON.stringify({ amount_micros: 25_000_000 }),
+}).then((r) => r.json());
+console.log("pay here:", checkout_url);
+
+await fetch(`${base}/auto-recharge`, {
+  method: "PUT",
+  headers: { ...auth, "Content-Type": "application/json" },
+  body: JSON.stringify({ enabled: true, threshold_micros: 10_000_000, amount_micros: 50_000_000 }),
+});
+```
+
+```python Python
+import os
+
+import requests
+
+base = "https://api.opentype.dev/v1/billing"
+auth = {"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"}
+
+billing = requests.get(base, headers=auth, timeout=30).json()
+print(f"balance ${billing['balance_micros'] / 1e6}", billing["auto_recharge"])
+
+checkout = requests.post(f"{base}/checkout", headers=auth, json={"amount_micros": 25_000_000}, timeout=30).json()
+print("pay here:", checkout["checkout_url"])
+
+requests.put(
+    f"{base}/auto-recharge",
+    headers=auth,
+    json={"enabled": True, "threshold_micros": 10_000_000, "amount_micros": 50_000_000},
+    timeout=30,
+)
+```
+
+</CodeGroup>
+
+`GET /v1/billing` answers with everything the page shows:
+
+```json
+{
+  "organization_id": "org_example",
+  "balance_micros": 24981000,
+  "currency": "usd",
+  "auto_recharge": {"enabled": true, "threshold_micros": 5000000, "amount_micros": 20000000},
+  "has_payment_method": true,
+  "transactions": [
+    {"id": "txn_usage_20260924", "kind": "usage", "amount_micros": -19000,
+     "description": "Usage on 2026-09-24", "created_at": "2026-09-24T00:00:00Z"},
+    {"id": "txn_5dc319db99f644e8b8f55ce6b7f55fed", "kind": "purchase", "amount_micros": 25000000,
+     "description": "Credit purchase", "created_at": "2026-09-20T14:02:11Z"}
+  ]
+}
+```
+
+Checkout answers `200` with `{"checkout_url": "…"}`; the credit arrives only after payment, not in that response.
+
+## Related
+
+- [Credits and billing](/guides/credits-and-billing) - holds, settlement, and how a run's cost reaches the balance.
+- [Auto-recharge](/guides/auto-recharge) - choose a threshold and amount, and what happens when a charge fails.
+- [Handling insufficient credits](/guides/handling-insufficient-credits) - what to do in code when a run gets `402`.
+- [Usage](/console/usage) - the cost of each run behind the daily usage rows.
+- [Models and pricing](/getting-started/models-and-pricing) - what Neon 1.1 costs per token.

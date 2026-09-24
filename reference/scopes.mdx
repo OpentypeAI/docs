@@ -1,0 +1,150 @@
+---
+title: "Scopes"
+description: "The nine OpenType scopes, the routes each one unlocks, the scopes each organization role holds, and the rules for giving scopes to an API key."
+icon: "key"
+keywords: ["scopes", "permissions", "roles", "runs_write", "scope_denied", "least privilege", "api key scopes"]
+---
+
+A scope is one capability a credential may use, such as `runs_write` to send runs or `usage_read` to read usage. Every protected route demands a scope, and a credential without it gets `403 scope_denied`. This page lists the routes behind each scope and the scopes behind each role, so you can give every key the least it needs. For the reasoning behind these choices, see [Scopes and roles](/security/scopes-and-roles).
+
+## The nine scopes
+
+Scope names are snake_case strings on the wire, and the same string appears in error messages.
+
+| Scope | Unlocks | Notes |
+| --- | --- | --- |
+| `runs_write` | `POST /v1/runs` | spends credit; the scope a production sender needs |
+| `runs_read` | `GET /v1/runs`, `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream` | read runs and their answers back |
+| `usage_read` | `GET /v1/usage`, `GET /v1/usage/ledger`, `GET /v1/usage/daily`, `GET /v1/usage/runs/{run_id}`, `GET /v1/quota` | usage totals, the per-call ledger, the daily series, and quota |
+| `billing_read` | `GET /v1/billing` | balance, auto-recharge settings, recent transactions |
+| `billing_write` | `POST /v1/billing/checkout`, `POST /v1/billing/portal`, `PUT /v1/billing/auto-recharge` | buy credits, open the billing portal, change auto-recharge |
+| `keys_read` | `GET /v1/keys`, `GET /v1/keys/{key_id}` | list and read keys; secrets are never returned |
+| `keys_write` | `POST /v1/keys`, `DELETE /v1/keys/{key_id}`, `POST /v1/keys/{key_id}/rotate` | create, revoke and rotate keys |
+| `members_read` | no documented route requires it on its own | held by most roles; see the table below |
+| `members_write` | required, in addition to `keys_write`, to create a key that acts as a service account | held by `owner` and `admin` only |
+
+`GET /healthz`, `GET /readyz` and `GET /openapi.json` need no credential and no scope.
+
+## Scopes by role
+
+Each member of an organization has a role. A console session holds the scopes of its role, and a person can only give a key scopes they hold themselves.
+
+| Role | `runs_read` | `runs_write` | `usage_read` | `billing_read` | `billing_write` | `keys_read` | `keys_write` | `members_read` | `members_write` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `owner` | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `admin` | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| `member` | yes | yes | yes | yes | no | yes | yes | yes | no |
+| `billing` | no | no | yes | yes | yes | no | no | yes | no |
+| `viewer` | yes | no | yes | yes | no | yes | no | no | no |
+
+What that means in practice:
+
+- **Sending runs** needs `owner`, `admin` or `member`.
+- **Buying credits and changing auto-recharge** needs `owner`, `admin` or `billing`.
+- **Creating service-account keys** needs `owner` or `admin`, because only they hold `members_write`.
+- **A role outside this table grants nothing.** Every scoped route answers `403 scope_denied`.
+
+See [Organizations and roles](/getting-started/organizations-and-roles) for what each role is for.
+
+## Scopes on an API key
+
+You choose a key's scopes when you create it. Three rules apply:
+
+1. **At least one scope.** An empty list is refused with `400 empty_scopes`.
+2. **Only scopes you hold.** Asking for a scope your own role or key lacks is refused with `403 scope_exceeds_creator`, and the message names the scope.
+3. **Frozen at creation.** A key keeps the scopes it was created with, even if the person who created it later moves to a role with fewer scopes. To narrow a key, create a new one with fewer scopes and revoke the old one.
+
+Duplicate scopes are removed and the list is returned sorted.
+
+### Suggested sets
+
+| Purpose | Scopes |
+| --- | --- |
+| Production service that sends runs | `runs_write`, `runs_read` |
+| Dashboard or reporting job | `runs_read`, `usage_read`, `billing_read` |
+| Automation that rotates keys | `keys_read`, `keys_write` |
+| Finance tooling | `billing_read`, `billing_write`, `usage_read` |
+
+The console's **API keys** page offers the first three as presets (**Send requests**, **Read only**, **Manage keys**) plus **Custom**.
+
+### Create a key with two scopes
+
+<CodeGroup>
+
+```bash cURL
+curl -sS https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ci-pipeline", "scopes": ["runs_write", "runs_read"]}'
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/keys", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`, // needs keys_write
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ name: "ci-pipeline", scopes: ["runs_write", "runs_read"] }),
+});
+const key = await res.json();
+if (!res.ok) throw new Error(`${key.error.code}: ${key.error.message}`);
+console.log(key.id, key.scopes); // store key.secret now: it is shown only once
+```
+
+```python Python
+import os, requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/keys",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},  # needs keys_write
+    json={"name": "ci-pipeline", "scopes": ["runs_write", "runs_read"]},
+    timeout=30,
+)
+key = res.json()
+if not res.ok:
+    raise RuntimeError(f"{key['error']['code']}: {key['error']['message']}")
+print(key["id"], key["scopes"])  # store key["secret"] now: it is shown only once
+```
+
+</CodeGroup>
+
+```json
+{
+  "id": "key_d92a9043204d41c09c78fc813d54ef06",
+  "name": "ci-pipeline",
+  "principal": {"type": "user", "id": "user_example"},
+  "scopes": ["runs_read", "runs_write"],
+  "state": "active",
+  "secret_prefix": "otsk_fde66231",
+  "created_by": "user_example",
+  "created_at": "2026-09-24T10:12:03Z",
+  "last_used_at": null,
+  "revoked_at": null,
+  "secret": "otsk_..."
+}
+```
+
+## When a scope is missing
+
+A credential that authenticates but lacks the route's scope gets a 403. The message names the missing scope in its wire form:
+
+```json
+{"error":{"code":"scope_denied","message":"the session lacks the runs_write scope","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Retrying does not help. Use a key that holds the scope, or create one; a key's scopes cannot be edited.
+
+| Code | Status | Cause | Fix |
+| --- | --- | --- | --- |
+| [`scope_denied`](/problems/scope_denied) | 403 | the credential lacks the route's scope | use or create a key that holds it |
+| [`scope_exceeds_creator`](/problems/scope_exceeds_creator) | 403 | you asked a new key for a scope you do not hold | request only scopes you hold, or ask an owner or admin |
+| [`empty_scopes`](/problems/empty_scopes) | 400 | `scopes` is `[]` | request at least one scope |
+| [`principal_is_not_the_caller`](/problems/principal_is_not_the_caller) | 403 | the key would act as a different user | omit `principal`, or use a service account |
+
+## Related
+
+- [Scopes and roles](/security/scopes-and-roles) - least privilege, and which role to give whom.
+- [API keys in the console](/console/api-keys) - create keys with a scope preset.
+- [Key rotation](/guides/key-rotation) - replace a key without widening its scopes.
+- [scope_denied](/problems/scope_denied) - the full page for the most common scope error.

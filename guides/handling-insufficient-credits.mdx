@@ -1,0 +1,235 @@
+---
+title: "Handling insufficient credits"
+sidebarTitle: "Insufficient credits"
+description: "Why a run gets 402 insufficient_credits, what the refusal leaves behind, and code that stops, alerts and retries with the same key after a top-up."
+icon: "circle-dollar-to-slot"
+keywords: ["402", "insufficient_credits", "out of credit", "balance", "top up", "retry", "auto-recharge"]
+---
+
+`POST /v1/runs` answers `402 insufficient_credits` when your organization's credit cannot cover the run's hold. This page is for anyone running OpenType unattended: it explains the exact rule, what the refusal leaves behind (nothing), and how to write a client that stops cleanly, tells a person, and resumes with the same `Idempotency-Key` once credit is back.
+
+## The rule
+
+Every run holds its spend ceiling, 5,000 micros ($0.005), from admission until it settles. Before a run is admitted, the server checks:
+
+```text
+available credit - 5,000 micros < 0   ->   402 insufficient_credits
+```
+
+Available credit is `balance_micros` from `GET /v1/billing`, which already has the holds of runs in flight subtracted. So:
+
+- **You need at least 5,000 micros available to start a run**, even when the run will cost 19 micros once it settles.
+- **Concurrency counts.** Twenty runs in flight hold 100,000 micros ($0.10) between them. With $0.10 of credit and twenty runs in flight, the twenty-first run is refused even though the settled costs would be tiny.
+- **The check happens late in admission**, after the body, scope, idempotency key and quota are checked. A `402` means the request itself was valid.
+
+```json
+{
+  "error": {
+    "code": "insufficient_credits",
+    "message": "the organization's credit balance does not cover this run",
+    "request_id": "req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"
+  }
+}
+```
+
+## What a 402 leaves behind
+
+- **No run.** The run and its hold are rolled back. Nothing is charged, and nothing appears in `GET /v1/runs` or the usage ledger.
+- **The `Idempotency-Key` is still free.** Retry with the **same** key and the **same** body once credit is back; it is admitted as a new run. You do not need to mint a new key after a `402`.
+- **An auto-recharge attempt is queued.** If [auto-recharge](/guides/auto-recharge) is on and a card is saved, the refusal triggers a background charge (at most one per organization per clock hour). The refused request is not held for it: send it again after the credit has landed.
+- **Replays are never refused for credit.** If the key already owns a run, the server returns that run (`200` or `202`) without checking the balance.
+
+## Resolve it
+
+<Steps>
+  <Step title="Check the balance">
+    `GET /v1/billing` with a `billing_read` key. Read `balance_micros`, `auto_recharge` and `has_payment_method`.
+  </Step>
+  <Step title="Add credit">
+    Buy credit with `POST /v1/billing/checkout` or the [console Billing page](/console/billing) ($5 to $1,000). The credit arrives after the payment succeeds, as a `purchase` transaction. See [Credits and billing](/guides/credits-and-billing#buy-credit).
+  </Step>
+  <Step title="Or let auto-recharge land">
+    If auto-recharge is on, wait for a new `purchase` row described `Auto-recharge`. If `has_payment_method` is `false`, no charge can happen: add a card in the billing portal.
+  </Step>
+  <Step title="Retry with the same key">
+    Send the same body with the same `Idempotency-Key`.
+  </Step>
+</Steps>
+
+## Code pattern
+
+Treat `402` as a stop signal for the whole queue, not as a per-request retry. Retrying in a tight loop only produces more `402`s. The pattern:
+
+1. On `402`, pause every worker that sends runs.
+2. Alert a person once, with the `request_id`.
+3. Poll the balance until at least 5,000 micros per run you plan to have in flight is available.
+4. Resume, re-sending the refused requests with their original keys.
+
+The poll uses `GET /v1/billing`, which needs `billing_read`. Every role holds it, so create the key for this client with `runs_write` and `billing_read`, or use a second read-only key for the poll.
+
+<CodeGroup>
+
+```bash curl
+# Send a run and branch on the status.
+status=$(curl -sS -o /tmp/run.json -w '%{http_code}' https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-triage" \
+  -d '{
+    "kind": "decision",
+    "state": {"ticket": "I was charged twice this month and nobody answers my emails."},
+    "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+    "max_output_tokens": 16
+  }')
+
+if [ "$status" = "402" ]; then
+  jq -r '.error.request_id' /tmp/run.json
+  # Check what is available before retrying with the same Idempotency-Key.
+  curl -sS https://api.opentype.dev/v1/billing \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" | jq '{balance_micros, auto_recharge, has_payment_method}'
+fi
+```
+
+```ts TypeScript
+const API = "https://api.opentype.dev";
+const KEY = process.env.OPENTYPE_API_KEY!;
+const RUN_HOLD_MICROS = 5_000;
+
+class OutOfCredit extends Error {
+  constructor(public requestId: string) {
+    super(`OpenType credit exhausted (request ${requestId})`);
+  }
+}
+
+async function sendRun(idempotencyKey: string, body: unknown) {
+  const res = await fetch(`${API}/v1/runs`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${KEY}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 402) {
+    const { error } = await res.json();
+    throw new OutOfCredit(error.request_id);
+  }
+  if (!res.ok) throw new Error(`run failed: ${res.status}`);
+  return res.json();
+}
+
+async function waitForCredit(concurrency: number, pollMs = 30_000) {
+  const needed = RUN_HOLD_MICROS * concurrency;
+  for (;;) {
+    const res = await fetch(`${API}/v1/billing`, { headers: { Authorization: `Bearer ${KEY}` } });
+    if (res.ok) {
+      const billing = await res.json();
+      if (billing.balance_micros >= needed) return;
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+}
+
+// One worker loop. `queue` holds jobs with a stable business id.
+async function drain(queue: { id: string; body: unknown }[], alert: (msg: string) => Promise<void>) {
+  let alerted = false;
+  while (queue.length > 0) {
+    const job = queue[0];
+    try {
+      await sendRun(`triage-${job.id}`, job.body); // same key on every attempt
+      queue.shift();
+      alerted = false;
+    } catch (err) {
+      if (!(err instanceof OutOfCredit)) throw err;
+      if (!alerted) {
+        await alert(`OpenType credit is exhausted; runs are paused. request_id=${err.requestId}`);
+        alerted = true;
+      }
+      await waitForCredit(1); // then retry the same job with the same key
+    }
+  }
+}
+```
+
+```python Python
+import os
+import time
+import requests
+
+API = "https://api.opentype.dev"
+HEADERS = {"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"}
+RUN_HOLD_MICROS = 5_000
+
+
+class OutOfCredit(Exception):
+    def __init__(self, request_id):
+        super().__init__(f"OpenType credit exhausted (request {request_id})")
+        self.request_id = request_id
+
+
+def send_run(idempotency_key, body):
+    res = requests.post(
+        f"{API}/v1/runs",
+        headers={**HEADERS, "Idempotency-Key": idempotency_key},
+        json=body,
+        timeout=130,
+    )
+    if res.status_code == 402:
+        raise OutOfCredit(res.json()["error"]["request_id"])
+    res.raise_for_status()
+    return res.json()
+
+
+def wait_for_credit(concurrency=1, poll_s=30):
+    needed = RUN_HOLD_MICROS * concurrency
+    while True:
+        res = requests.get(f"{API}/v1/billing", headers=HEADERS, timeout=30)
+        if res.ok and res.json()["balance_micros"] >= needed:
+            return
+        time.sleep(poll_s)
+
+
+def drain(queue, alert):
+    """queue: list of dicts with a stable 'id' and a run 'body'."""
+    alerted = False
+    while queue:
+        job = queue[0]
+        try:
+            send_run(f"triage-{job['id']}", job["body"])  # same key on every attempt
+            queue.pop(0)
+            alerted = False
+        except OutOfCredit as err:
+            if not alerted:
+                alert(f"OpenType credit is exhausted; runs are paused. request_id={err.request_id}")
+                alerted = True
+            wait_for_credit(1)  # then retry the same job with the same key
+```
+
+</CodeGroup>
+
+With several workers, share one paused flag between them and call `waitForCredit` with the number of workers, so the balance covers every hold they will take at once.
+
+## Prevent it
+
+- **Turn on auto-recharge** with a threshold above one charge's worth of spend and an amount above your busiest hour. See [Auto-recharge](/guides/auto-recharge#pick-the-numbers).
+- **Watch the balance.** Poll `GET /v1/billing` on a schedule and alert when `balance_micros` falls below a floor you choose, before runs start failing.
+- **Size the balance for concurrency.** Keep at least 5,000 micros per run you allow in flight.
+
+## 402 versus 429
+
+Both refuse a run before any model call, and both leave the same key reusable. They mean different things:
+
+| | `402 insufficient_credits` | `429` quota codes |
+| --- | --- | --- |
+| Question it answers | Has the organization paid for this run? | Is the organization allowed to spend this much this period? |
+| Cleared by | Buying credit, or auto-recharge landing | Runs in flight settling, a smaller request, or the next quota period |
+| Details | This page | [Spend limits and quotas](/guides/spend-limits-and-quotas) |
+
+## Related
+
+- [insufficient_credits](/problems/insufficient_credits) - the reference entry for this code.
+- [Credits and billing](/guides/credits-and-billing) - read the balance and buy credit.
+- [Auto-recharge](/guides/auto-recharge) - top up automatically so runs do not stop.
+- [Idempotency](/guides/idempotency) - why the same key is safe to reuse after a `402`.
+- [Error handling](/guides/error-handling) - how `402` fits in the full retry policy.

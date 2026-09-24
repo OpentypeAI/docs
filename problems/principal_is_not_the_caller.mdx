@@ -1,0 +1,101 @@
+---
+title: "principal_is_not_the_caller"
+description: "HTTP 403 on POST /v1/keys: the new key was set to act as another user. Who a key can act as, and how to create a service-account key instead."
+icon: "user-shield"
+keywords: ["principal_is_not_the_caller", "403", "POST /v1/keys", "principal", "service account", "user key"]
+---
+
+`principal_is_not_the_caller` means you tried to create an API key that acts as a different user. Read this page if you create keys for other people or for services.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `403` | `principal_is_not_the_caller` | No. Change the principal. |
+
+## What happened
+
+Route: `POST /v1/keys`.
+
+A key's `principal` says who it acts as. The body set `principal` to `{"type": "user", "id": X}`, where `X` is not you. Nobody can mint a key that acts as another person, so no key was created.
+
+| `principal` | Result |
+| --- | --- |
+| omitted | the key acts as you; this is the default |
+| `{"type": "user", "id": <your id>}` | the key acts as you |
+| `{"type": "user", "id": <another user>}` | refused with `principal_is_not_the_caller` |
+| `{"type": "service_account", "id": <any id you choose>}` | the key acts as a service account; you also need `members_write` |
+
+## How to fix
+
+- **For your own use:** omit `principal`.
+- **For a service or pipeline:** use a service-account principal, with an id that names the service. Creating one needs `members_write`, which owners and admins hold.
+- **For another person:** ask them to create their own key.
+
+## Example
+
+```json
+{"error":{"code":"principal_is_not_the_caller","message":"a key may act as the calling user or as a service account, not as another user","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Creating a service-account key. The call needs `keys_write` and `members_write`.
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "ticket-triage-worker",
+    "scopes": ["runs_write", "runs_read"],
+    "principal": {"type": "service_account", "id": "ticket-triage-worker"}
+  }'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/keys", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    name: "ticket-triage-worker",
+    scopes: ["runs_write", "runs_read"],
+    principal: { type: "service_account", id: "ticket-triage-worker" },
+  }),
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+// Store body.secret now; it is shown only once.
+console.log(body.id, body.principal);
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/keys",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}", "Content-Type": "application/json"},
+    json={
+        "name": "ticket-triage-worker",
+        "scopes": ["runs_write", "runs_read"],
+        "principal": {"type": "service_account", "id": "ticket-triage-worker"},
+    },
+    timeout=30,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+# Store body["secret"] now; it is shown only once.
+print(body["id"], body["principal"])
+```
+</CodeGroup>
+
+## Related
+
+- [API key security](/security/api-key-security) - how keys act, and how to keep them safe.
+- [Scopes and roles](/security/scopes-and-roles) - who holds `members_write`.
+- [Production checklist](/guides/production-checklist) - one narrow key per service and environment.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

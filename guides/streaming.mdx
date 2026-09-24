@@ -1,88 +1,165 @@
 ---
-title: "Streaming"
-description: "Watch a run's state over Server-Sent Events. The answer arrives once, whole and validated."
+title: "Streaming a run's state"
+sidebarTitle: "Streaming"
+description: "GET /v1/runs/{run_id}/stream returns a one-shot server-sent events snapshot of a stored run. What it sends, what it does not, and how to read it."
+icon: "wave-square"
+keywords: ["streaming", "server-sent events", "SSE", "text/event-stream", "GET /v1/runs/{run_id}/stream", "terminal event", "state event"]
 ---
 
-`GET /v1/runs/{run_id}/stream` returns `text/event-stream`. It **observes** a run: it reads stored state, never calls a provider, and so never costs anything. Requires `runs_read`.
+`GET /v1/runs/{run_id}/stream` returns a run's stored state as server-sent events (SSE). Read this page if your stack already consumes `text/event-stream`, or if you are deciding between the stream and [polling](/guides/polling). It is not token streaming: the answer arrives once, whole, after the run has settled.
 
-<Note>
-This is not token streaming. A verdict is only valid once the whole document has passed your schema, so OpenType never sends partial output. The answer appears once, complete, in the `terminal` event.
-</Note>
+## What the stream is
+
+- **A snapshot.** The server reads the stored run, writes one or two events, and closes the response. It does not wait for a `pending` run to settle.
+- **Read-only.** It never calls a model and never costs anything.
+- **Whole answers only.** There are no partial-answer events. A verdict is only valid once the whole document has passed your schema, and a decision is only valid once every question is read, so OpenType never sends part of either.
+- **No resume.** Frames carry no `id:` and no `retry:` field, and the server ignores `Last-Event-ID`. To observe a run again, request the route again.
+
+It needs the `runs_read` scope, like `GET /v1/runs/{run_id}`.
+
+## Response headers
+
+| Header | Value |
+| --- | --- |
+| `content-type` | `text/event-stream` |
+| `cache-control` | `no-cache, no-store` |
+| `x-accel-buffering` | `no`, so proxies pass the events through without buffering |
+| `x-request-id` | the request id, as on every response |
 
 ## Events
 
-The response contains at most two events, then closes:
+Each frame is one `event:` line, one `data:` line holding a single line of JSON, and a blank line.
 
-| Event | When | `data` |
+| Event | When | `data` fields |
 | --- | --- | --- |
-| `state` | always, first | `{"run_id", "state"}` |
-| `terminal` | only if the run is `completed` or `failed` | `{"run_id", "state", "input_digest", "output_digest", "kind", "verdict" or "decision"}` |
+| `state` | always, first | `run_id`, `state` |
+| `terminal` | only when the run is `completed` or `failed` | `run_id`, `state`, `input_digest`, `output_digest` (may be `null`); a completed run adds `kind` and `verdict` or `decision` |
 
-`kind` and the answer appear only on a completed run that stored one. The answer uses the same shape as in `RunResponse`. Each `data` line is one line of JSON.
+A **completed** run sends both events:
 
 ```text
 event: state
-data: {"run_id":"run_0b6f0e2a9f4c4b1c9a3d5e7f8a9b0c1d","state":"completed"}
+data: {"run_id":"run_a4314b6cc08f4bd8814099a613abeb44","state":"completed"}
 
 event: terminal
-data: {"run_id":"run_0b6f0e2a9f4c4b1c9a3d5e7f8a9b0c1d","state":"completed","input_digest":"9f2c...","output_digest":"41ab...","kind":"decision","decision":{"answers":{...},"draws":1,"read":"slot_constrained"}}
+data: {"decision":{"answers":{"urgent":{"answered_within_labels":true,"label_mass":0.991,"probability":0.83,"type":"noul"}},"draws":1,"read":"slot_constrained"},"input_digest":"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6","kind":"decision","output_digest":"18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4","run_id":"run_a4314b6cc08f4bd8814099a613abeb44","state":"completed"}
 ```
 
-If the run is still in flight, you get only the `state` event. Reconnect after a short delay to observe it again.
+A **failed** run sends both events, with no `kind` and no answer:
 
-## Consume it
+```text
+event: state
+data: {"run_id":"run_a4314b6cc08f4bd8814099a613abeb44","state":"failed"}
+
+event: terminal
+data: {"input_digest":"2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6","output_digest":null,"run_id":"run_a4314b6cc08f4bd8814099a613abeb44","state":"failed"}
+```
+
+A **pending** run sends only the first event, then the response closes:
+
+```text
+event: state
+data: {"run_id":"run_a4314b6cc08f4bd8814099a613abeb44","state":"pending"}
+```
+
+The answer in `terminal` has the stored shape, the same as [`GET /v1/runs/{run_id}`](/guides/polling): a decision carries `answers`, `draws` and `read`, without `model`, `stages` or the thought fields. The stream carries no `usage` or `cost_micros`; read those with `GET /v1/runs/{run_id}`.
+
+Read fields by name. The order of keys inside `data` is not part of the contract.
+
+## Read it
+
+The response ends on its own, so read the whole body and split it into frames. You do not need an SSE library.
 
 <CodeGroup>
 
 ```bash cURL
-curl -sN https://api.opentype.dev/v1/runs/$RUN_ID/stream \
+curl -sN https://api.opentype.dev/v1/runs/run_a4314b6cc08f4bd8814099a613abeb44/stream \
   -H "Authorization: Bearer $OPENTYPE_API_KEY"
 ```
 
 ```ts TypeScript
-async function observe(runId: string) {
+type Snapshot = { run_id: string; state: string; [k: string]: unknown };
+
+async function snapshot(runId: string): Promise<Snapshot> {
   const res = await fetch(`https://api.opentype.dev/v1/runs/${runId}/stream`, {
     headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
   });
-  if (!res.ok) throw new Error((await res.json()).error.code);
-  const events: Record<string, any> = {};
+  if (!res.ok) {
+    // Errors before the stream starts are ordinary JSON errors.
+    const { error } = await res.json();
+    throw new Error(`${res.status} ${error.code} (${error.request_id})`);
+  }
+  const events: Record<string, Snapshot> = {};
   for (const frame of (await res.text()).split("\n\n")) {
     const event = frame.match(/^event: (.+)$/m)?.[1];
     const data = frame.match(/^data: (.+)$/m)?.[1];
     if (event && data) events[event] = JSON.parse(data);
   }
-  return events.terminal ?? events.state; // no terminal yet: poll again later
+  // "terminal" when the run has settled; otherwise only "state" (pending).
+  return events.terminal ?? events.state;
 }
 ```
 
 ```python Python
-import json, os, requests
+import json
+import os
+import requests
 
-def observe(run_id: str) -> dict:
+def snapshot(run_id: str) -> dict:
     res = requests.get(
         f"https://api.opentype.dev/v1/runs/{run_id}/stream",
         headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
         timeout=30,
     )
-    res.raise_for_status()
+    if not res.ok:
+        # Errors before the stream starts are ordinary JSON errors.
+        error = res.json()["error"]
+        raise RuntimeError(f"{res.status_code} {error['code']} ({error['request_id']})")
     events = {}
     for frame in res.text.split("\n\n"):
-        lines = dict(line.split(": ", 1) for line in frame.splitlines() if ": " in line)
-        if "event" in lines and "data" in lines:
-            events[lines["event"]] = json.loads(lines["data"])
-    return events.get("terminal") or events["state"]  # no terminal yet: poll again later
+        fields = dict(line.split(": ", 1) for line in frame.splitlines() if ": " in line)
+        if "event" in fields and "data" in fields:
+            events[fields["event"]] = json.loads(fields["data"])
+    # "terminal" when the run has settled; otherwise only "state" (pending).
+    return events.get("terminal") or events["state"]
 ```
 
 </CodeGroup>
 
-The response is sent with `Cache-Control: no-cache, no-store` and `X-Accel-Buffering: no`, so proxies pass it through without buffering.
+### With EventSource
+
+A browser `EventSource` reconnects automatically when the response closes, so it would request the snapshot again and again. If you use one, close it after the first `terminal` event, or after the first `state` event when the run is `pending`. `EventSource` also cannot send an `Authorization` header, and an API key does not belong in a browser. Read the stream from your server with the code above.
+
+## Waiting for a pending run
+
+The stream does not wait. To wait for a run that is `pending`, request it again after a delay, with the same limits as polling: a run still `pending` after its deadline (at most 120 seconds after it was sent) failed before a model call and will not settle. Send the original request again with a new `Idempotency-Key`. [Polling](/guides/polling) has the loop and the details.
 
 ## When to use it
 
-`POST /v1/runs` already waits for the answer and returns it with `200`. Use the stream, or `GET /v1/runs/{run_id}`, when you hold a `run_id` but not the answer. For example, after a `202` from a replayed `Idempotency-Key`, or from a different process than the one that created the run.
+`POST /v1/runs` already waits and returns the answer. Use the stream, or `GET /v1/runs/{run_id}`, when you hold a `run_id` but not the answer: after a client timeout, after a `202` on a replayed key, or in a different process from the one that created the run.
 
-| Status | Code | Meaning |
-| --- | --- | --- |
-| `400` | `invalid_run_id` | Not a `run_...` id. |
-| `404` | `run_not_found` | No such run for your organization. |
-| `503` | `not_configured`, `database_unavailable` | Stored state is unavailable. Retry later. |
+| You need | Use |
+| --- | --- |
+| The answer to a request you are sending now | the `POST /v1/runs` response |
+| The answer, `usage` and `cost_micros` of a stored run | `GET /v1/runs/{run_id}` |
+| The state and answer of a stored run, in an SSE pipeline you already have | `GET /v1/runs/{run_id}/stream` |
+
+## Errors
+
+Errors before the stream starts are ordinary JSON errors, the same as for `GET /v1/runs/{run_id}`:
+
+| Status | Code | Cause | Fix |
+| --- | --- | --- | --- |
+| `400` | [`invalid_run_id`](/problems/invalid_run_id) | The path value is not `run_` followed by a UUID | Send the `run_id` exactly as the API returned it. |
+| `401` | [`missing_credentials`](/problems/missing_credentials), [`invalid_credential`](/problems/invalid_credential) | No key, or a rejected one | Send an active key. |
+| `403` | [`scope_denied`](/problems/scope_denied) | The key lacks `runs_read` | Use a key with `runs_read`. |
+| `404` | [`run_not_found`](/problems/run_not_found) | No such run in the key's organization | Check the id and the organization. |
+| `503` | [`database_unavailable`](/problems/database_unavailable), [`not_configured`](/problems/not_configured) | Stored state cannot be read right now | Retry with backoff. |
+
+## Related
+
+- [Polling](/guides/polling) - read a run by id and tell a slow run from one that will stay pending.
+- [Idempotency](/guides/idempotency) - why a replayed key can answer `202` with a pending run.
+- [Runs](/getting-started/runs) - run states and what a run returns.
+- [Errors](/reference/errors) - the error envelope and every code.
+- [API reference](/api-reference/introduction) - the stream route in the full spec.

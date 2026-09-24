@@ -1,0 +1,89 @@
+---
+title: "Create an account"
+description: "Sign up for OpenType, verify your email to receive $5 of free credit, and sign in to the console with a password, an email code, Google, or GitHub."
+icon: "user-plus"
+keywords: ["sign up", "signup", "register", "free credit", "verify email", "sign in", "login", "password reset"]
+---
+
+This page covers everything between arriving at OpenType and having a funded organization you can create API keys in: signing up, verifying your email, the free credit, the ways to sign in, and choosing an organization. It is for anyone setting up OpenType for the first time, or signing in on a new device.
+
+Sign-up is open to anyone; you do not need an invitation.
+
+## Sign up
+
+<Steps>
+  <Step title="Open the sign-up page">
+    Go to [console.opentype.dev/sign-up](https://console.opentype.dev/sign-up).
+  </Step>
+  <Step title="Fill in the form">
+    | Field | What to enter |
+    | --- | --- |
+    | **First name** | Your first name. |
+    | **Last name** | Your last name. |
+    | **Work email** | The address you want to sign in with. The free credit is tied to it. |
+    | **Password** | At least 10 characters. Checked against known breaches. |
+
+    A password that appears in a known breach is refused, even if it is long enough. Pick another one.
+  </Step>
+  <Step title="Verify your email">
+    Follow the instructions in the verification email. Verifying does two things:
+
+    - It confirms you own the address.
+    - It adds **\$5 of free credit** to your organization.
+  </Step>
+  <Step title="Sign in">
+    Sign in to the [console](https://console.opentype.dev). A welcome callout confirms the credit: `Welcome. $X of credit is on your account.`, with your current balance in place of `$X`.
+  </Step>
+</Steps>
+
+## What you get
+
+| | |
+| --- | --- |
+| An organization | Created for you at sign-up. Your API keys, runs, usage, and credit balance belong to it. See [Organizations and roles](/getting-started/organizations-and-roles). |
+| Free credit | \$5, which is 5,000,000 micro-USD. It is granted once the email address is verified, and **once per email address**: signing up again with an address that already received it does not grant it again. |
+
+\$5 goes a long way. The three-question run in the [quickstart](/getting-started/quickstart) costs 19 micro-USD, so the grant covers more than 250,000 runs like it. Each run needs \$0.005 of available credit to start, because it holds that amount until it finishes; see [Models and pricing](/getting-started/models-and-pricing#the-per-request-ceiling).
+
+When the credit runs out, runs are refused with `402 insufficient_credits` until you [buy credits](/guides/credits-and-billing) or turn on [auto-recharge](/guides/auto-recharge).
+
+## Sign in
+
+The console offers four ways to sign in.
+
+| Option | How it works |
+| --- | --- |
+| Email and password | Enter your email address and password. |
+| **Email me a code instead** | Sign in with a code sent to your email address instead of a password. |
+| **Continue with Google** | Sign in with your Google account. |
+| **Continue with GitHub** | Sign in with your GitHub account. |
+
+### Reset a forgotten password
+
+Choose **Forgot password?** on the sign-in form and follow the instructions sent to your email address. If you only need to get in once, **Email me a code instead** works without a password.
+
+## Choose an organization
+
+After you sign in, the console needs to know which organization you are working in.
+
+- **You belong to several.** The **Choose an organization** screen lists them. Pick the one you want to work in.
+- **You belong to none.** The console shows **Your account has no organization yet** and leads to the **Create organization** form. Create one to continue.
+
+## Troubleshooting
+
+| What you see | Why | What to do |
+| --- | --- | --- |
+| The password is refused | It is shorter than 10 characters, or it appears in a known breach. | Choose a longer, unique password. |
+| No credit on the account | The email address is not verified yet, or it already received the grant on an earlier account. | Verify the address from the email you received. The grant is not repeated for the same address. |
+| **Your account has no organization yet** | Your account is not a member of any organization. | Use the **Create organization** form. |
+| API calls fail with `402 insufficient_credits` | Your available balance is below the \$0.005 a run holds. | [Buy credits](/guides/credits-and-billing), or verify your email if you have not yet. |
+
+More fixes are on [Troubleshooting](/getting-started/troubleshooting).
+
+## Related
+
+- [Quickstart](/getting-started/quickstart) - create a key and send your first run.
+- [Console sign-in](/console/sign-in) - the sign-in screens in more detail.
+- [Organizations and roles](/getting-started/organizations-and-roles) - what your organization owns and what each role may do.
+- [Credits and billing](/guides/credits-and-billing) - buy credits once the free \$5 is spent.
+- [API keys](/console/api-keys) - create the key your code will use.

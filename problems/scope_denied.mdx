@@ -1,0 +1,107 @@
+---
+title: "scope_denied"
+description: "HTTP 403: the credential is valid but lacks the scope this route needs. Which scope each route needs, which roles hold it, and how to fix it."
+icon: "shield-halved"
+keywords: ["scope_denied", "403", "forbidden", "scopes", "runs_write", "permissions", "API key scopes", "roles"]
+---
+
+`scope_denied` means the credential was accepted but is not allowed to call this route. Read this page when a key that works on one route is refused on another.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `403` | `scope_denied` | No. Use a credential that holds the scope. |
+
+## What happened
+
+Routes: every protected route under `/v1/`.
+
+Each route needs a scope, and the credential does not hold it. The message names the missing scope in its wire form, for example `runs_write`. The message says "session" for API keys too; the meaning is the same.
+
+| Scope | Routes |
+| --- | --- |
+| `runs_read` | `GET /v1/runs`, `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream` |
+| `runs_write` | `POST /v1/runs` |
+| `keys_read` | `GET /v1/keys`, `GET /v1/keys/{key_id}` |
+| `keys_write` | `POST /v1/keys`, `DELETE /v1/keys/{key_id}`, `POST /v1/keys/{key_id}/rotate` |
+| `billing_read` | `GET /v1/billing` |
+| `billing_write` | `POST /v1/billing/checkout`, `POST /v1/billing/portal`, `PUT /v1/billing/auto-recharge` |
+| `usage_read` | `GET /v1/usage`, `GET /v1/usage/ledger`, `GET /v1/usage/daily`, `GET /v1/usage/runs/{run_id}`, `GET /v1/quota` |
+
+Where the scopes come from:
+
+- **An API key** holds exactly the scopes chosen when it was created. They never change.
+- **A console session** holds the scopes of your role in the organization.
+
+| Role | Scopes |
+| --- | --- |
+| `owner`, `admin` | all nine: the seven above plus `members_read` and `members_write` |
+| `member` | `runs_read`, `runs_write`, `keys_read`, `keys_write`, `members_read`, `usage_read`, `billing_read` |
+| `billing` | `usage_read`, `billing_read`, `billing_write`, `members_read` |
+| `viewer` | `runs_read`, `usage_read`, `billing_read`, `keys_read` |
+
+On `POST /v1/runs` the scope is checked after the body is parsed. A malformed body gets [`invalid_body`](/problems/invalid_body) first.
+
+## How to fix
+
+1. Read the scope name in the message.
+2. **For an API key:** create a new key that includes that scope, deploy it, then revoke the old key. A key's scopes cannot be edited. You can only grant scopes you hold yourself.
+3. **For a console session:** the scopes come from your role. Use an account whose role holds the scope. Buying credit, for example, needs `billing_write`, which owners, admins and the `billing` role hold.
+4. Keep keys narrow. A service that only sends runs needs `runs_write` and `runs_read`, nothing more.
+
+## Example
+
+```json
+{"error":{"code":"scope_denied","message":"the session lacks the runs_write scope","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Creating a replacement key with the missing scope. The call needs `keys_write`, and you must hold every scope you request.
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ticket-triage-prod", "scopes": ["runs_write", "runs_read"]}'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/keys", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ name: "ticket-triage-prod", scopes: ["runs_write", "runs_read"] }),
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+// Store body.secret now; it is shown only once. Then revoke the old key.
+console.log(body.id, body.scopes);
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/keys",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}", "Content-Type": "application/json"},
+    json={"name": "ticket-triage-prod", "scopes": ["runs_write", "runs_read"]},
+    timeout=30,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+# Store body["secret"] now; it is shown only once. Then revoke the old key.
+print(body["id"], body["scopes"])
+```
+</CodeGroup>
+
+## Related
+
+- [Scopes](/reference/scopes) - every scope and the routes it unlocks.
+- [Scopes and roles](/security/scopes-and-roles) - which role holds which scope, and why.
+- [Key rotation](/guides/key-rotation) - replace a key without downtime.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

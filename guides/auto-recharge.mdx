@@ -1,0 +1,184 @@
+---
+title: "Auto-recharge"
+description: "Keep your credit balance funded automatically: set a threshold and an amount, save a card, and know exactly when a charge happens."
+icon: "arrows-rotate"
+keywords: ["auto-recharge", "auto top-up", "recharge", "threshold", "saved card", "billing"]
+---
+
+Auto-recharge charges your saved card a fixed amount whenever the organization's balance drops below a threshold you choose. Turn it on if your runs must not stop at [`402 insufficient_credits`](/problems/insufficient_credits) while nobody is watching the balance. This page covers the one route that configures it, the rules it validates, when a charge actually happens, and how to confirm it worked.
+
+You can set the same two numbers on the [Billing page in the console](/console/billing), in the fields **When below, $** and **Buy, $**.
+
+## Before you start
+
+- **You need `billing_write`.** Owners, admins and billing users hold it; members and viewers do not. See [Credits and billing](/guides/credits-and-billing#routes-and-who-can-call-them).
+- **You need a saved card.** `GET /v1/billing` reports it as `has_payment_method`. Paying through checkout saves the card, or you can add one in the billing portal (`POST /v1/billing/portal`) without buying anything. Without a card, auto-recharge can be enabled but never charges.
+
+## Turn it on
+
+`PUT /v1/billing/auto-recharge` sets auto-recharge and returns the updated billing state, the same body as `GET /v1/billing`.
+
+| Field | Type | Required | Rule |
+| --- | --- | --- | --- |
+| `enabled` | boolean | always | `true` turns auto-recharge on, `false` turns it off |
+| `threshold_micros` | integer | when `enabled` is `true` | The balance below which a charge is made. At most 1,000,000,000 ($1,000). |
+| `amount_micros` | integer | when `enabled` is `true` | What each charge buys. 5,000,000 to 1,000,000,000 micros ($5 to $1,000), in whole cents (a multiple of 10,000). |
+
+The body refuses any other field. Every amount is micro-USD: 1,000,000 micros is 1 US dollar.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/billing/auto-recharge \
+  -X PUT \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "threshold_micros": 5000000, "amount_micros": 20000000}'
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/billing/auto-recharge", {
+  method: "PUT",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  // Below $5, buy $20.
+  body: JSON.stringify({ enabled: true, threshold_micros: 5_000_000, amount_micros: 20_000_000 }),
+});
+if (!res.ok) throw new Error(`auto-recharge update failed: ${res.status} ${await res.text()}`);
+const billing = await res.json();
+if (!billing.has_payment_method) {
+  console.warn("Auto-recharge is on but no card is saved: open the billing portal to add one.");
+}
+```
+
+```python Python
+import os
+import requests
+
+res = requests.put(
+    "https://api.opentype.dev/v1/billing/auto-recharge",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    # Below $5, buy $20.
+    json={"enabled": True, "threshold_micros": 5_000_000, "amount_micros": 20_000_000},
+    timeout=30,
+)
+res.raise_for_status()
+billing = res.json()
+if not billing["has_payment_method"]:
+    print("Auto-recharge is on but no card is saved: open the billing portal to add one.")
+```
+
+</CodeGroup>
+
+```json
+{
+  "organization_id": "org_example",
+  "balance_micros": 24981000,
+  "currency": "usd",
+  "auto_recharge": {"enabled": true, "threshold_micros": 5000000, "amount_micros": 20000000},
+  "has_payment_method": true,
+  "transactions": [
+    {"id": "txn_usage_20260924", "kind": "usage", "amount_micros": -19000,
+     "description": "Usage on 2026-09-24", "created_at": "2026-09-24T00:00:00Z"}
+  ]
+}
+```
+
+## Turn it off
+
+Send `enabled: false`. The threshold and amount are optional then.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/billing/auto-recharge \
+  -X PUT \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+```
+
+```ts TypeScript
+await fetch("https://api.opentype.dev/v1/billing/auto-recharge", {
+  method: "PUT",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ enabled: false }),
+});
+```
+
+```python Python
+import os
+import requests
+
+requests.put(
+    "https://api.opentype.dev/v1/billing/auto-recharge",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    json={"enabled": False},
+    timeout=30,
+).raise_for_status()
+```
+
+</CodeGroup>
+
+## When a charge happens
+
+Saving the setting does not charge anything. The check runs in the background at two moments:
+
+- after each run is admitted by `POST /v1/runs`, and
+- after each run is refused with `402 insufficient_credits`.
+
+At that moment a charge is made only if all of these hold:
+
+| Condition | Where to see it |
+| --- | --- |
+| Auto-recharge is enabled | `auto_recharge.enabled` |
+| A card is saved | `has_payment_method` |
+| The available balance is below `threshold_micros` | `balance_micros`, which already has the holds of runs in flight subtracted |
+| No auto-recharge charge was made for the organization in the current clock hour | at most one charge per organization per clock hour |
+
+The charge is `amount_micros` on the saved card. The credit lands when the payment succeeds, as a `purchase` transaction with the description `Auto-recharge`.
+
+What follows from those rules:
+
+- **Nothing happens without traffic.** If no run is sent, no check runs, even when the balance is below the threshold. Buy credit through checkout if you need the balance up now.
+- **The run that triggers a charge is not held for it.** A run admitted while the balance is low goes ahead on the current balance. A run refused with `402` stays refused: the charge it queued helps the next attempt, once the payment has landed.
+- **One charge per hour is the ceiling.** If one hour's spend is larger than `amount_micros`, the balance can still run out before the next hour. Size `amount_micros` above your busiest hour, or buy extra credit through checkout.
+- **Changing the setting takes effect at the next check.** The next admitted or refused run sees the new values.
+
+## Pick the numbers
+
+- **Threshold:** at least your spend over the time a charge takes to land, plus 5,000 micros so the next run can still start. Every run needs 5,000 micros of available credit to be admitted.
+- **Amount:** at least one busy hour of spend, because one charge per hour is the most you get. Read your spend per day from [`GET /v1/usage/daily`](/guides/usage-reporting#spend-per-day) to size it.
+
+For example, a pipeline that settles about $2 an hour at its peak is covered by a $5 threshold and a $20 amount.
+
+## Confirm it works
+
+1. Read `GET /v1/billing` and check `auto_recharge.enabled` is `true`, both numbers are what you sent, and `has_payment_method` is `true`.
+2. After the balance has dropped below the threshold and a run has been sent, look for a new `purchase` row described `Auto-recharge` in `transactions`.
+3. If none appears, check the saved card in the billing portal, and check that a charge was not already made in the same clock hour.
+
+## Errors
+
+| Status | Code | When | What to do |
+| --- | --- | --- | --- |
+| `400` | [`invalid_amount`](/problems/invalid_amount) | `threshold_micros and amount_micros are required when enabled` | Send both numbers with `enabled: true` |
+| `400` | [`invalid_amount`](/problems/invalid_amount) | `threshold_micros must not exceed 1000000000` | Use a threshold of $1,000 or less |
+| `400` | [`invalid_amount`](/problems/invalid_amount) | `amount_micros must be between 5000000 and 1000000000` or `amount_micros must be a whole number of cents` | Use $5 to $1,000 in a multiple of 10,000 micros |
+| `403` | [`scope_denied`](/problems/scope_denied) | The key lacks `billing_write` | Use a key created by an owner, admin or billing user with that scope |
+| `503` | [`billing_not_configured`](/problems/billing_not_configured) | Billing is not switched on for this deployment | Retry later |
+| `503` | [`database_unavailable`](/problems/database_unavailable) | Storage is unreachable | Retry with backoff |
+
+Malformed JSON, an unknown field, a wrong type or a missing `Content-Type` gets a plain-text `400`, `415` or `422` with no JSON envelope. Check the body against the field table above.
+
+## Related
+
+- [Credits and billing](/guides/credits-and-billing) - the balance, checkout and the billing portal.
+- [Handling insufficient credits](/guides/handling-insufficient-credits) - what your code does when a run gets `402`.
+- [Billing in the console](/console/billing) - set the threshold and amount without code.
+- [Usage reporting](/guides/usage-reporting) - measure your daily spend to size the amount.

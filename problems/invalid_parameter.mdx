@@ -1,0 +1,122 @@
+---
+title: "invalid_parameter"
+description: "HTTP 400 on the usage routes: a bad time window, ledger limit or run id. Every message, the accepted formats, and how to fix the query."
+icon: "sliders"
+keywords: ["invalid_parameter", "400", "start_at", "end_at", "usage", "ledger", "limit", "time window", "RFC 3339"]
+---
+
+`invalid_parameter` means a usage request carried a time window, a ledger `limit` or a run id that OpenType cannot read. Read this page when a usage or reporting call fails with a 400.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `400` | `invalid_parameter` | No. Fix the parameter first. |
+
+## What happened
+
+Routes:
+
+- `GET /v1/usage`
+- `GET /v1/usage/ledger`
+- `GET /v1/usage/daily`
+- `GET /v1/usage/runs/{run_id}`
+
+The message is the whole explanation; it has no prefix. These are every message:
+
+| Message | Cause |
+| --- | --- |
+| `start_at must be an RFC 3339 UTC timestamp such as 2026-02-01T00:00:00Z` | `start_at` is not in the exact `YYYY-MM-DDTHH:MM:SSZ` form, or is not a real calendar date |
+| `end_at must be an RFC 3339 UTC timestamp such as 2026-02-01T00:00:00Z` | the same, for `end_at` |
+| `start_at must be before end_at` | the window is empty or reversed |
+| `start_at and end_at must be supplied together` | only one of the two was sent |
+| `the window must span at most 92 days` | `GET /v1/usage/daily` only: `end_at` minus `start_at` is over 92 days |
+| `limit must be at least 1` | `GET /v1/usage/ledger` with `limit=0` |
+| `run_id must start with run_` | `GET /v1/usage/runs/{run_id}`: the path value has no `run_` prefix |
+| `run_id must carry a uuid` | `GET /v1/usage/runs/{run_id}`: the part after `run_` is not a UUID |
+
+The accepted forms:
+
+| Parameter | Accepted |
+| --- | --- |
+| `start_at`, `end_at` | exactly `YYYY-MM-DDTHH:MM:SSZ`: UTC, second precision, no fractional seconds, no offsets such as `+02:00`. Send both or neither. Both omitted means the current UTC calendar month. The window is half-open, `[start_at, end_at)`. |
+| `limit` (ledger) | an integer of at least 1; the default is 50 and values above 200 are treated as 200 |
+| `run_id` | `run_` + 32 hex, or `run_` + a hyphenated UUID, in either case |
+
+<Note>
+An unknown query parameter, or a value that is not a number where one is expected, is refused before these checks. The answer is a plain-text 400 whose body begins `Failed to deserialize query string`, not a JSON error. Fall back to the HTTP status when the body is not JSON.
+</Note>
+
+## How to fix
+
+1. Match the message in the table above.
+2. Format timestamps in UTC with a `Z` and no fractional seconds, for example `2026-09-01T00:00:00Z`.
+3. Send `start_at` and `end_at` together, with `start_at` first in time.
+4. For daily series, split windows longer than 92 days into several calls.
+5. Use a `run_id` exactly as the API returned it.
+
+## Example
+
+```json
+{"error":{"code":"invalid_parameter","message":"start_at must be before end_at","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+A usage request with a valid window:
+
+<CodeGroup>
+```bash curl
+curl -G https://api.opentype.dev/v1/usage \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  --data-urlencode "start_at=2026-09-01T00:00:00Z" \
+  --data-urlencode "end_at=2026-10-01T00:00:00Z"
+```
+
+```typescript TypeScript
+// Second precision, UTC, trailing Z: 2026-09-01T00:00:00Z
+const toWire = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
+
+const params = new URLSearchParams({
+  start_at: toWire(new Date(Date.UTC(2026, 8, 1))),
+  end_at: toWire(new Date(Date.UTC(2026, 9, 1))),
+});
+
+const res = await fetch(`https://api.opentype.dev/v1/usage?${params}`, {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+console.log(body.spend.settled_micros);
+```
+
+```python Python
+import os
+from datetime import datetime, timezone
+
+import requests
+
+def to_wire(dt: datetime) -> str:
+    # Second precision, UTC, trailing Z: 2026-09-01T00:00:00Z
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+resp = requests.get(
+    "https://api.opentype.dev/v1/usage",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    params={
+        "start_at": to_wire(datetime(2026, 9, 1, tzinfo=timezone.utc)),
+        "end_at": to_wire(datetime(2026, 10, 1, tzinfo=timezone.utc)),
+    },
+    timeout=30,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+print(body["spend"]["settled_micros"])
+```
+</CodeGroup>
+
+## Related
+
+- [Usage reporting](/guides/usage-reporting) - the four usage routes and what they return.
+- [Pagination](/guides/pagination) - ledger limits and narrowing a window.
+- [Conventions](/reference/conventions) - timestamp and id formats across the API.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

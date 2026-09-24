@@ -1,0 +1,127 @@
+---
+title: "provider_malformed_response"
+description: "HTTP 503 on POST /v1/runs: the model's output could not be decoded. The call is still billed. Report the request_id and retry with a new key."
+icon: "file-circle-exclamation"
+keywords: ["provider_malformed_response", "503", "provider", "billed", "decision run", "probabilities", "POST /v1/runs"]
+---
+
+`provider_malformed_response` means the model answered, but its output could not be decoded into a valid result. Read this page when a run fails with this code, and note that unlike most 503s, this one is billed.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `provider_malformed_response` | Yes, with a new `Idempotency-Key`. The failed attempt is billed, and so is the retry. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+The model service returned a response OpenType could not decode into an answer. For a decision run, that includes a probability or confidence that is not a finite number between 0 and 1.
+
+Every `provider_*` code has the same message, "the provider call failed". Branch on `code`, never on the message. The message never contains model output.
+
+**The call is billed.** The model served it, so the run is settled as `failed` at the cost it consumed, and its cost appears in `GET /v1/usage/ledger`. A replay with the same `Idempotency-Key` returns `200` with `"state": "failed"`; it does not run again and is not charged again.
+
+## How to fix
+
+1. Log the `request_id`, and report it: this code points to a problem on the service side.
+2. Retry with a **new** `Idempotency-Key`. The old key replays the failed run. The new run is billed like any other.
+3. Do not retry in a loop. If the same request fails this way twice, stop and report both `request_id` values, so you are not billed for repeated failures.
+
+## Example
+
+```json
+{"error":{"code":"provider_malformed_response","message":"the provider call failed","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+A retry with a new key, capped at two attempts, since each failed attempt is billed:
+
+<CodeGroup>
+```bash curl
+BODY='{"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}'
+
+for attempt in 1 2; do
+  # A new Idempotency-Key per attempt: the old key replays the billed, failed run.
+  RESP=$(curl -sS -w '\n%{http_code}' https://api.opentype.dev/v1/runs \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -H "Idempotency-Key: $(uuidgen)" \
+    -d "$BODY")
+  STATUS=$(printf '%s' "$RESP" | tail -n1)
+  printf '%s\n' "$RESP" | sed '$d'
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # 5xx: back off, then try again
+    *) break ;;                        # success or 4xx: stop
+  esac
+done
+```
+
+```typescript TypeScript
+const body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16};
+
+async function createRunWithRetry(payload: unknown, maxAttempts = 2) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch("https://api.opentype.dev/v1/runs", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "Content-Type": "application/json",
+        // A new key per attempt: the old key replays the billed, failed run.
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) return data;
+
+    const { code, message, request_id } = data.error;
+    console.error(`POST /v1/runs -> ${res.status} ${code}: ${message} (${request_id})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${request_id})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const run = await createRunWithRetry(body);
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}
+
+def create_run_with_retry(payload: dict, max_attempts: int = 2) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        resp = requests.post(
+            "https://api.opentype.dev/v1/runs",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                # A new key per attempt: the old key replays the billed, failed run.
+                "Idempotency-Key": str(uuid.uuid4()),
+            },
+            json=payload,
+            timeout=130,  # longer than the largest deadline_ms (120,000 ms)
+        )
+        data = resp.json()
+        if resp.ok:
+            return data
+
+        err = data["error"]
+        print(f"POST /v1/runs -> {resp.status_code} {err['code']}: {err['message']} ({err['request_id']})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{err['code']} ({err['request_id']})")
+        time.sleep(2 ** attempt)
+
+run = create_run_with_retry(body)
+```
+</CodeGroup>
+
+## Related
+
+- [Usage reporting](/guides/usage-reporting) - find the billed attempt in the ledger.
+- [Idempotency](/guides/idempotency) - when to reuse an `Idempotency-Key` and when to send a new one.
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Request ids](/reference/request-ids) - send your own `x-request-id` and quote it when you report a problem.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

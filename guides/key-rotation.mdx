@@ -1,0 +1,265 @@
+---
+title: "Key rotation"
+description: "Replace an API key secret without downtime: overlap a new key and revoke the old one, or rotate in place when a secret leaks. Both patterns, step by step."
+icon: "key"
+keywords: ["key rotation", "rotate", "revoke", "API key", "secret", "leaked key", "zero downtime", "key_revoked"]
+---
+
+API keys never expire, so replacing a secret is a job you schedule. This page is for whoever owns the services that hold OpenType keys: it compares the two ways to replace a secret, gives the exact calls for each, and covers what goes wrong. Pick **overlap** for planned rotation with zero downtime, and **rotate in place** when a secret has leaked and must stop working now.
+
+## Pick a pattern
+
+| | Overlap: new key, then revoke | Rotate in place |
+| --- | --- | --- |
+| Routes | `POST /v1/keys`, then `DELETE /v1/keys/{key_id}` | `POST /v1/keys/{key_id}/rotate` |
+| Key id | A new `key_` id | Unchanged |
+| Name and scopes | You choose them again (a chance to narrow scopes) | Unchanged |
+| Old secret | Works until you revoke it | Stops working at once. There is no grace period. |
+| Downtime | None, if you revoke after every caller has switched | Every caller fails with `401` until it has the new secret |
+| Use it for | Planned, routine rotation | A leaked or exposed secret |
+| Where | API or [console](/console/api-keys) | API only. The console has no rotate action. |
+
+Both patterns need a credential with `keys_write`, and listing keys needs `keys_read`. In the examples on this page, `OPENTYPE_API_KEY` holds that management key, not the runtime key you are replacing. Only the key's id goes in a URL; the secret never does.
+
+## Overlap: rotate without downtime
+
+<Steps>
+  <Step title="Find the key you are replacing">
+    List your keys and note the `id`, `name` and `scopes` of the one to replace. `secret_prefix` (the first 13 characters of the secret) tells you which deployment holds it.
+
+    ```bash
+    curl -sS https://api.opentype.dev/v1/keys \
+      -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+      | jq '.keys[] | select(.state == "active") | {id, name, secret_prefix, scopes, last_used_at}'
+    ```
+  </Step>
+  <Step title="Create the replacement">
+    Create a new key with the scopes the service needs. You can only grant scopes you hold yourself. The response is the only time the secret is shown.
+
+    ```bash
+    curl -sS https://api.opentype.dev/v1/keys \
+      -X POST \
+      -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"name": "ticket-router-prod-2026-09", "scopes": ["runs_read", "runs_write"]}'
+    ```
+  </Step>
+  <Step title="Store it and deploy">
+    Write the `secret` into your secret store and roll it out to every instance of the service.
+  </Step>
+  <Step title="Confirm the old key is idle">
+    Read the old key and check that `last_used_at` has stopped moving. It is updated in the background, about once a minute at most, so wait a few minutes after the last instance restarts.
+  </Step>
+  <Step title="Revoke the old key">
+    `DELETE /v1/keys/{key_id}` with the old id. The old secret stops authenticating on its next request. The row stays listed with `state: "revoked"` for audit.
+  </Step>
+</Steps>
+
+The whole flow, as a script:
+
+<CodeGroup>
+
+```bash curl
+#!/usr/bin/env bash
+set -euo pipefail
+API=https://api.opentype.dev
+AUTH="Authorization: Bearer $OPENTYPE_API_KEY"
+OLD_KEY_ID=key_d92a9043204d41c09c78fc813d54ef06
+
+# 1. Create the replacement with the same scopes as the old key.
+scopes=$(curl -sS "$API/v1/keys/$OLD_KEY_ID" -H "$AUTH" | jq -c '.scopes')
+new=$(curl -sS "$API/v1/keys" -X POST -H "$AUTH" -H "Content-Type: application/json" \
+  -d "{\"name\": \"ticket-router-prod-$(date -u +%Y-%m)\", \"scopes\": $scopes}")
+echo "$new" | jq -r '.secret' > new-secret.txt   # move this into your secret store, then delete the file
+echo "new key: $(echo "$new" | jq -r '.id')"
+
+# 2. Deploy the new secret, then check the old key has gone quiet.
+curl -sS "$API/v1/keys/$OLD_KEY_ID" -H "$AUTH" | jq '{last_used_at}'
+
+# 3. Revoke the old key.
+curl -sS "$API/v1/keys/$OLD_KEY_ID" -X DELETE -H "$AUTH" | jq '{id, state, revoked_at}'
+```
+
+```ts TypeScript
+const API = "https://api.opentype.dev";
+const headers = {
+  Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+  "Content-Type": "application/json",
+};
+
+async function call(method: string, path: string, body?: unknown) {
+  const res = await fetch(`${API}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+// Step 1: create the replacement with the same scopes.
+export async function createReplacement(oldKeyId: string, name: string) {
+  const old = await call("GET", `/v1/keys/${oldKeyId}`);
+  const created = await call("POST", "/v1/keys", { name, scopes: old.scopes });
+  return { id: created.id as string, secret: created.secret as string }; // store the secret now
+}
+
+// Step 2, after deploying: true once the old key has not been used for `quietMs`.
+export async function isIdle(oldKeyId: string, quietMs = 10 * 60_000) {
+  const old = await call("GET", `/v1/keys/${oldKeyId}`);
+  return old.last_used_at === null || Date.now() - Date.parse(old.last_used_at) > quietMs;
+}
+
+// Step 3: revoke. Safe to call twice.
+export async function revoke(oldKeyId: string) {
+  const revoked = await call("DELETE", `/v1/keys/${oldKeyId}`);
+  return revoked.revoked_at as string;
+}
+```
+
+```python Python
+import os
+from datetime import datetime, timezone
+
+import requests
+
+API = "https://api.opentype.dev"
+HEADERS = {"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"}
+
+
+def call(method, path, body=None):
+    res = requests.request(method, f"{API}{path}", headers=HEADERS, json=body, timeout=30)
+    if not res.ok:
+        raise RuntimeError(f"{method} {path}: {res.status_code} {res.text}")
+    return res.json()
+
+
+def create_replacement(old_key_id, name):
+    """Step 1: create the replacement with the same scopes. Store the secret now."""
+    old = call("GET", f"/v1/keys/{old_key_id}")
+    created = call("POST", "/v1/keys", {"name": name, "scopes": old["scopes"]})
+    return created["id"], created["secret"]
+
+
+def is_idle(old_key_id, quiet_s=600):
+    """Step 2, after deploying: True once the old key has not been used for quiet_s seconds."""
+    last = call("GET", f"/v1/keys/{old_key_id}")["last_used_at"]
+    if last is None:
+        return True
+    used = datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - used).total_seconds() > quiet_s
+
+
+def revoke(old_key_id):
+    """Step 3: revoke. Safe to call twice."""
+    return call("DELETE", f"/v1/keys/{old_key_id}")["revoked_at"]
+```
+
+</CodeGroup>
+
+## Rotate in place: when a secret leaks
+
+`POST /v1/keys/{key_id}/rotate` issues a new secret for the same key. The id, name and scopes stay the same. **The old secret stops working at once**, so every caller still holding it gets `401 invalid_credential` until it has the new one. That is what you want when a secret has leaked.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/keys/key_d92a9043204d41c09c78fc813d54ef06/rotate \
+  -X POST \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const keyId = "key_d92a9043204d41c09c78fc813d54ef06";
+const res = await fetch(`https://api.opentype.dev/v1/keys/${keyId}/rotate`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+if (res.status === 409) throw new Error("key is revoked: create a new key instead");
+if (!res.ok) throw new Error(`rotate failed: ${res.status}`);
+const { secret } = await res.json(); // shown only in this response
+```
+
+```python Python
+import os
+import requests
+
+key_id = "key_d92a9043204d41c09c78fc813d54ef06"
+res = requests.post(
+    f"https://api.opentype.dev/v1/keys/{key_id}/rotate",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+if res.status_code == 409:
+    raise RuntimeError("key is revoked: create a new key instead")
+res.raise_for_status()
+secret = res.json()["secret"]  # shown only in this response
+```
+
+</CodeGroup>
+
+```json
+{
+  "id": "key_d92a9043204d41c09c78fc813d54ef06",
+  "name": "ci-pipeline",
+  "principal": {"type": "user", "id": "user_example"},
+  "scopes": ["runs_read", "runs_write"],
+  "state": "active",
+  "secret_prefix": "otsk_3b9e0c71",
+  "created_by": "user_example",
+  "created_at": "2026-09-24T10:12:03Z",
+  "last_used_at": "2026-09-24T11:40:17Z",
+  "revoked_at": null,
+  "secret": "otsk_..."
+}
+```
+
+The response has the same fields as a newly created key: the key record plus `secret`, returned with `200`. `secret_prefix` changes to match the new secret. No field records the rotation time.
+
+<Warning>
+If a secret was ever sent in a URL path, the API answers `400 secret_in_path` and does nothing else. Treat that secret as leaked: rotate it right away, then call the route again with the `key_` id.
+</Warning>
+
+### After a leak
+
+1. Rotate the key, or revoke it if nothing legitimate uses it.
+2. Deploy the new secret to the callers that should have it.
+3. Read [usage reporting](/guides/usage-reporting#the-ledger) for the window of the exposure and check for runs you do not recognize.
+
+## What the old secret does after each action
+
+| Action | Old secret | Key record |
+| --- | --- | --- |
+| Create a second key | Keeps working | Unchanged |
+| Rotate | `401 invalid_credential` from the next request | Same id, new `secret_prefix`, still `active` |
+| Revoke | `401 invalid_credential` from the next request | `state: "revoked"`, `revoked_at` set, kept in the list |
+
+A revoked key cannot be rotated or re-enabled. To replace it, create a new key.
+
+## Errors
+
+| Status | Code | When | What to do |
+| --- | --- | --- | --- |
+| `400` | [`secret_in_path`](/problems/secret_in_path) | The path holds an `otsk_` secret instead of a `key_` id | Rotate that key now, then use the `key_` id |
+| `400` | [`malformed_key_id`](/problems/malformed_key_id) | The path value does not start with `key_` | Use the `id` from the key object |
+| `400` | [`empty_scopes`](/problems/empty_scopes) | Create was sent with `"scopes": []` | Request at least one scope |
+| `401` | [`invalid_credential`](/problems/invalid_credential) | The credential making the call is unknown, revoked or already rotated | Use a current key with `keys_write` |
+| `403` | [`scope_denied`](/problems/scope_denied) | The credential lacks `keys_write` (or `keys_read` to list) | Use a key or role that holds it |
+| `403` | [`scope_exceeds_creator`](/problems/scope_exceeds_creator) | The new key asks for a scope you do not hold | Request only scopes you hold |
+| `404` | [`key_not_found`](/problems/key_not_found) | No key with that id in your organization | Check the id and the organization |
+| `409` | [`key_revoked`](/problems/key_revoked) | You tried to rotate a revoked key | Create a new key |
+
+## Plan it
+
+- **Give every environment and service its own key**, so rotating one never touches the others. Name keys after the process that holds them.
+- **Keep a management key apart from runtime keys.** A runtime key needs `runs_write` and `runs_read`; only the key that performs rotation needs `keys_read` and `keys_write`.
+- **Rotate on a schedule** you choose, since keys never expire, and after anyone with access to a secret leaves.
+- **Revoke keys that stop being used.** `last_used_at` shows which ones.
+
+## Related
+
+- [API key security](/security/api-key-security) - how secrets are stored and why they are shown once.
+- [API keys in the console](/console/api-keys) - create and revoke keys without code.
+- [Scopes and roles](/security/scopes-and-roles) - choose the smallest scope set for each key.
+- [key_revoked](/problems/key_revoked) - the reference entry for rotating a revoked key.
+- [Production checklist](/guides/production-checklist) - where a rotation plan fits in going live.

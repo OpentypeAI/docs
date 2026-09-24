@@ -1,9 +1,14 @@
 ---
 title: "API reference"
-description: "Base URL, headers, pagination, and the OpenAPI document."
+sidebarTitle: "Introduction"
+description: "Base URL, bearer auth, the Idempotency-Key on runs, the error envelope, request ids, micro-USD amounts and pagination for every OpenType endpoint."
+icon: "code"
+keywords: ["API reference", "OpenAPI", "base URL", "bearer", "Idempotency-Key", "error envelope", "x-request-id", "micro-USD", "pagination"]
 ---
 
-The pages in this tab are generated from the OpenAPI 3.1 document that the server itself emits. The same document is served at `GET /openapi.json`.
+This tab documents every public endpoint of the OpenType API: runs, API keys, usage and quota, billing, and the health checks. Read this page once before you write a client. It covers the rules that apply to every endpoint, so the endpoint pages can stay short.
+
+The endpoint pages are generated from an OpenAPI 3.1 document, [`openapi.json`](https://github.com/OpentypeAI/docs/blob/main/api-reference/openapi.json). Each page has a playground that sends real requests with your key.
 
 ## Base URL
 
@@ -11,30 +16,316 @@ The pages in this tab are generated from the OpenAPI 3.1 document that the serve
 https://api.opentype.dev
 ```
 
+Every endpoint except the health checks lives under `/v1`. Request and response bodies are JSON, except the server-sent events of `GET /v1/runs/{run_id}/stream`.
+
+## Authentication
+
+Send a bearer credential on every `/v1` request:
+
+```http
+Authorization: Bearer otsk_...
+```
+
+| Credential | Looks like | Use it for |
+| --- | --- | --- |
+| API key | `otsk_` followed by 64 lowercase hex characters, 69 characters in total | Servers, scripts and CI. Create one in the [console](/console/api-keys). |
+| Console session token | anything else | The console, after you sign in. You do not handle it yourself. |
+
+- The scheme name `Bearer` is case-insensitive. There is no other auth header and no cookie auth.
+- A key acts in its organization with exactly the scopes it was created with. Each endpoint page names the scope it needs, for example `runs_write` to create a run. See [Scopes](/reference/scopes).
+- A key's secret is returned once, when you create or rotate the key. Keys do not expire; revoke or rotate them. See [API key security](/security/api-key-security).
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 401 | `missing_credentials` | No `Authorization` header, a scheme other than `Bearer`, or an empty token. |
+| 401 | `invalid_credential` | The key is malformed, unknown or revoked. Do not retry it unchanged. |
+| 403 | `scope_denied` | The credential lacks the endpoint's scope. The message names the scope. |
+| 403 | `no_active_organization` | A session with no organization selected. |
+
+## Your first request
+
+Create a decision run. Keep your key in `OPENTYPE_API_KEY`.
+
+<CodeGroup>
+
+```bash curl
+curl https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-triage" \
+  -d '{
+    "kind": "decision",
+    "model": "neon-1.1",
+    "instructions": "You triage customer support tickets.",
+    "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+    "questions": {
+      "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+      "bucket": {"type": "choice", "instructions": "which queue?",
+                 "criteria": {"billing": "payment problems", "other": null}}
+    },
+    "max_output_tokens": 16
+  }'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4822-triage",
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    model: "neon-1.1",
+    instructions: "You triage customer support tickets.",
+    state: { ticket: "I was charged twice this month and nobody answers my emails.", plan: "pro" },
+    questions: {
+      urgent: { type: "noul", instructions: "reply within the hour?" },
+      bucket: {
+        type: "choice",
+        instructions: "which queue?",
+        criteria: { billing: "payment problems", other: null },
+      },
+    },
+    max_output_tokens: 16,
+  }),
+});
+const body = await res.json();
+if (!res.ok) {
+  throw new Error(`${body.error.code} (${body.error.request_id}): ${body.error.message}`);
+}
+console.log(body.decision.answers.urgent.probability);
+```
+
+```python Python
+import os
+import requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "ticket-4822-triage",
+    },
+    json={
+        "kind": "decision",
+        "model": "neon-1.1",
+        "instructions": "You triage customer support tickets.",
+        "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+        "questions": {
+            "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+            "bucket": {
+                "type": "choice",
+                "instructions": "which queue?",
+                "criteria": {"billing": "payment problems", "other": None},
+            },
+        },
+        "max_output_tokens": 16,
+    },
+    timeout=130,
+)
+body = res.json()
+if not res.ok:
+    raise RuntimeError(f"{body['error']['code']} ({body['error']['request_id']}): {body['error']['message']}")
+print(body["decision"]["answers"]["urgent"]["probability"])
+```
+
+</CodeGroup>
+
+The call is synchronous: it returns `200` once the run has settled, with the answers in `decision.answers`. Neon 1.1 serves decision runs; a verdict run currently answers `503 no_route_available`. The walkthrough is in the [quickstart](/getting-started/quickstart), and the answer shapes are in [Decision runs](/guides/decision-runs).
+
 ## Headers
 
 <ParamField header="Authorization" type="string" required>
-  `Bearer otsk_...`. See [Authentication](/authentication).
-</ParamField>
-
-<ParamField header="Idempotency-Key" type="string">
-  Required on `POST /v1/runs`, 1 to 255 bytes. Reuse the same key on every retry of one logical request. See [Concepts](/concepts#idempotency).
+  `Bearer <credential>`, on every `/v1` request.
 </ParamField>
 
 <ParamField header="Content-Type" type="string">
-  `application/json` on every request with a body.
+  `application/json` on every request with a body. Without it, `POST /v1/runs` answers `400 invalid_body` and the other routes answer a plain-text `415`.
 </ParamField>
 
-## Pagination
+<ParamField header="Idempotency-Key" type="string">
+  Required on `POST /v1/runs`, and read nowhere else. 1 to 255 bytes of visible ASCII text, unique per logical request.
+</ParamField>
 
-`GET /v1/runs` takes `limit` (1 to 100, default 20) and `offset` (default 0) and lists newest first. The response repeats the `limit` and `offset` it applied, so you can see when an oversized `limit` was lowered. Unknown query parameters are `400`.
+<ParamField header="x-request-id" type="string">
+  Optional. Your own id for the request, 1 to 128 characters from `A-Z a-z 0-9 . _ -`. It is echoed back; otherwise the server assigns one.
+</ParamField>
+
+## Idempotency on runs
+
+`POST /v1/runs` refuses a request without an `Idempotency-Key`. The key makes a retry safe: the server remembers which run each key created, per organization, and never expires a key.
+
+| You send | You get |
+| --- | --- |
+| A new key | The run is admitted and executed. |
+| The same key and the same body, run settled | `200` with the stored run and `"replayed": true`. No second charge. A failed run replays as `200` with `"state": "failed"`. |
+| The same key and the same body, run still `pending` | `202` with the stored run. |
+| The same key and a different body | `409 idempotency_conflict`. |
+| No key | `400 idempotency_key_required`. |
+| An empty key, a key over 255 bytes, or non-ASCII text | `400 invalid_idempotency_key`. |
+
+The body counts as the same when the prompt, the kind and the contract match: the `state` or messages, the questions and instructions (or the schema), `draws` and `think_tokens`. `max_output_tokens`, `deadline_ms` and `capability_hint` are not part of the comparison.
+
+<Warning>
+A run that fails before the model served it, for example with `503 no_route_available` or `504 deadline_exceeded`, stays `pending`. Retrying with the same key then returns `202` indefinitely. After any `5xx` or `504` from `POST /v1/runs`, and after `413 input_too_large`, retry with a new key. After a `409 idempotency_conflict`, keep the original body or use a new key. After any other `4xx`, fix the request; no run was stored, so the key can be reused.
+</Warning>
+
+See [Idempotency](/guides/idempotency) for key design and retry loops.
 
 ## Errors
 
-Every error uses the same envelope, `{"error": {"code", "message", "request_id"}}`. See [Errors](/errors) for every code.
+Every JSON error uses one envelope:
 
-## Generate types
+```json
+{
+  "error": {
+    "code": "scope_denied",
+    "message": "the session lacks the runs_write scope",
+    "request_id": "req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"
+  }
+}
+```
+
+| Field | Always present | What it is |
+| --- | --- | --- |
+| `code` | yes | Stable snake_case. The only field to branch on. |
+| `message` | yes | For people. It can change, and it never contains model output. Log it; do not parse it. |
+| `request_id` | yes | The id of this request, the same value as the `x-request-id` header. |
+| `violations` | only on `verdict_schema_violation` | Up to 10 JSON Pointers into the rejected document. |
+
+Some rejections come from the HTTP layer before the API sees the request, and have a plain-text body instead of JSON: a malformed JSON body (`400`), a missing `Content-Type` (`415`), an unknown or mistyped field (`422`), or an oversized body (`413`) on the keys, usage and billing routes; an unknown path (`404`); a wrong method (`405`). When the body is not JSON, act on the HTTP status. `x-request-id` is still set.
+
+How to react, by status:
+
+| Status | Do this |
+| --- | --- |
+| `400`, `401`, `403`, `404`, `409`, `413`, `415`, `422` | Fix the request, the credential or the id. Retrying unchanged returns the same error. |
+| `402` | Add credit, then retry. See [Handling insufficient credits](/guides/handling-insufficient-credits). |
+| `429` | A quota for the current period is used up. Wait for the next period or ask for a higher quota. There is no request-rate limit. |
+| `500`, `503`, `504` | Retry with exponential backoff. On `POST /v1/runs`, use a new `Idempotency-Key`. |
+
+Every code has its own page under [Problems](/problems/index). The full table is in [Errors](/reference/errors), and retry patterns are in [Error handling](/guides/error-handling).
+
+## Request ids
+
+Every response carries an `x-request-id` header, including errors and rejections. Send your own id to correlate the API's response with your logs; a value that does not match `^[A-Za-z0-9._-]{1,128}$` is replaced with `req_` followed by 32 hex characters. Log the id with every failure and quote it when you report a problem. See [Request ids](/reference/request-ids).
+
+## Money and tokens
+
+Every amount is an integer in micro-USD: `1,000,000` is one US dollar, and `10,000` is one cent.
+
+| Field | Example | In dollars |
+| --- | --- | --- |
+| `cost_micros` on a run | `19` | $0.000019 |
+| `ceiling_micros`, the per-run spend ceiling | `5000` | $0.005 |
+| `balance_micros` after the sign-up credit | `5000000` | $5.00 |
+| `amount_micros` for a checkout | `25000000` | $25.00 |
+
+`balance_micros` and billing transaction amounts are signed; every other amount is zero or positive. Neon 1.1 costs $0.042 per million tokens for input and for output, and each part is rounded up to a whole micro-USD separately. A run holds its whole spend ceiling, at most 5,000 micro-USD, against your credit and quota until it settles. See [Models and pricing](/getting-started/models-and-pricing).
+
+## Identifiers and timestamps
+
+| Value | Form |
+| --- | --- |
+| Run id | `run_` followed by 32 hex characters. The usage routes return the hyphenated UUID form, `run_xxxxxxxx-xxxx-...`; every route accepts both. |
+| Key id | `key_` followed by 32 hex characters. Not a secret. |
+| Request id | `req_` followed by 32 hex characters, or your own value. |
+| Billing transaction id | `txn_` followed by 32 hex characters, or `txn_usage_YYYYMMDD` for a day's usage. |
+| Timestamp | `YYYY-MM-DDTHH:MM:SSZ`, UTC, second precision. |
+| Date | `YYYY-MM-DD`, UTC. |
+| Digest | 64 hex characters, SHA-256. |
+
+Runs responses omit an optional field that has no value. Keys, usage and billing responses send it as `null`.
+
+## Pagination
+
+Only `GET /v1/runs` pages, by offset:
+
+| Parameter | Default | Range |
+| --- | --- | --- |
+| `limit` | 20 | 1 to 100. Out-of-range values are clamped, so `0` becomes `1` and `500` becomes `100`. |
+| `offset` | 0 | 0 or more. |
 
 ```bash
-npx openapi-typescript https://api.opentype.dev/openapi.json -o opentype.ts
+curl "https://api.opentype.dev/v1/runs?limit=50&offset=50" \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
 ```
+
+```json
+{
+  "runs": [
+    {
+      "run_id": "run_a4314b6cc08f4bd8814099a613abeb44",
+      "kind": "decision",
+      "state": "completed",
+      "input_digest": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+      "output_digest": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+      "replayed": true
+    }
+  ],
+  "limit": 50,
+  "offset": 50
+}
+```
+
+Runs come newest first. The response echoes the `limit` and `offset` it applied. A page shorter than `limit` is the last one. Any other query parameter, or a value that is not a whole number, is `400 invalid_body`. List rows carry no answer, usage or cost: retrieve a run for those.
+
+The other lists do not page. `GET /v1/keys` returns every key, `GET /v1/billing` the last 50 transactions, and `GET /v1/usage/ledger` up to `limit` entries (default 50, at most 200) inside a time window. See [Pagination](/guides/pagination).
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Request body | 1 MiB (1,048,576 bytes) |
+| Input estimate per run | 64,000 tokens; 3,968 tokens for a Neon 1.1 decision |
+| Spend per run | 5,000 micro-USD |
+| `deadline_ms` | 1 to 120,000, default 30,000 |
+| Questions per decision | 1 to 64, each with 2 to 20 alternatives |
+| Usage windows | `start_at` and `end_at` together, or neither; at most 92 days for the daily series |
+
+There is no request-rate limit. See [Limits](/reference/limits) for the rest.
+
+## Endpoint groups
+
+<CardGroup cols={2}>
+  <Card title="Runs" icon="play" href="/api-reference/runs/create">
+    Create a run, list runs, retrieve one, or read it as server-sent events. Scopes `runs_write` and `runs_read`.
+  </Card>
+  <Card title="API keys" icon="key" href="/api-reference/keys/create">
+    Create, list, retrieve, rotate and revoke keys. Scopes `keys_write` and `keys_read`.
+  </Card>
+  <Card title="Usage and quota" icon="chart-line" href="/api-reference/usage/rollup">
+    Rollups, the daily series, the per-attempt ledger, one run's usage, and quota. Scope `usage_read`.
+  </Card>
+  <Card title="Billing" icon="credit-card" href="/api-reference/billing/get">
+    Balance and transactions, checkout, the billing portal and auto-recharge. Scopes `billing_read` and `billing_write`.
+  </Card>
+  <Card title="Health" icon="heart-pulse" href="/api-reference/health/liveness">
+    Public liveness and readiness checks. No credential.
+  </Card>
+  <Card title="Errors" icon="triangle-exclamation" href="/reference/errors">
+    Every error code, its status, and what to do about it.
+  </Card>
+</CardGroup>
+
+## OpenAPI document and generated types
+
+Download [`openapi.json`](https://github.com/OpentypeAI/docs/blob/main/api-reference/openapi.json) to generate a typed client:
+
+```bash
+curl -L -o opentype-openapi.json https://github.com/OpentypeAI/docs/raw/main/api-reference/openapi.json
+npx openapi-typescript opentype-openapi.json -o opentype.ts
+```
+
+The document describes only the endpoints documented here. Import it into an HTTP client or a mock server the same way.
+
+## Related
+
+- [Quickstart](/getting-started/quickstart) - make your first run in a few minutes.
+- [Authentication](/security/authentication) - how keys and session tokens are verified, and what each failure means.
+- [Idempotency](/guides/idempotency) - design keys and retry loops that never double-charge.
+- [Errors](/reference/errors) - every code the API returns, with the fix for each.
+- [API conventions](/reference/conventions) - the formats and rules shared by every endpoint, in more depth.

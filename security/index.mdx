@@ -1,0 +1,54 @@
+---
+title: "Security"
+description: "How OpenType authenticates requests, stores API keys, limits what a key can do, and handles the data you send in a run."
+icon: "shield-halved"
+keywords: ["security", "api keys", "authentication", "scopes", "roles", "least privilege", "data handling"]
+---
+
+This tab is for anyone who puts an OpenType API key into a server, a script or a CI pipeline, and for whoever reviews that setup. It explains how a request proves who it is, how keys are stored and retired, how scopes and roles limit what a key can do, and what happens to the data you send in a run.
+
+Every page here describes what the API at `https://api.opentype.dev` actually does. Where a behavior needs action on your side, such as rotating a key that leaked, the page says so and shows the call.
+
+## Pages in this tab
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/security/authentication">
+    The bearer header, the two kinds of credential, and every 401, 403 and 503 an auth check can return.
+  </Card>
+  <Card title="API key security" icon="lock" href="/security/api-key-security">
+    Key format, what is stored, the secret shown once, revocation, rotation, and what to do after a leak.
+  </Card>
+  <Card title="Scopes and roles" icon="user-shield" href="/security/scopes-and-roles">
+    The nine scopes, the role-to-scope table, the scope ceiling on new keys, and service-account keys.
+  </Card>
+  <Card title="Data handling" icon="database" href="/security/data-handling">
+    What reaches the model, what a run keeps and returns, and how credentials are kept out of logs.
+  </Card>
+</CardGroup>
+
+## What OpenType does, and what you do
+
+| OpenType does | You do |
+| --- | --- |
+| Stores only the SHA-256 of each key secret, and shows the secret once | Copy the secret into a secret manager the moment it is shown |
+| Refuses a revoked or unknown key with `401 invalid_credential` | Revoke keys you no longer use; keys never expire on their own |
+| Limits a key to the scopes it was created with | Give each key only the scopes its process needs |
+| Refuses a key that asks for more scopes than its creator holds (`403 scope_exceeds_creator`) | Create keys from an account whose role covers the scopes you need |
+| Refuses a key secret sent in a URL path (`400 secret_in_path`) | Rotate that key at once, because the secret may now sit in logs |
+| Redacts the `authorization` and `cookie` headers in its traces | Keep keys out of your own logs, URLs and client-side code |
+| Scopes every read to the credential's organization | Use one key per environment so a leak stays contained |
+
+## Four rules that cover most of it
+
+1. **Keep keys on the server.** A key in browser or mobile code can be read by anyone who loads it.
+2. **One key per process and environment.** Name it after what holds it, so a leak or a `last_used_at` check points to one place.
+3. **Least privilege.** A process that only sends runs needs `runs_write`, plus `runs_read` if it reads runs back. It does not need `keys_write` or `billing_write`.
+4. **Plan for rotation.** A secret you cannot replace in minutes is a secret you will leave in place after a leak. See [Key rotation](/guides/key-rotation).
+
+## Related
+
+- [Authentication](/security/authentication) - start here if a request returns 401 or 403.
+- [Console API keys](/console/api-keys) - create and revoke keys without writing code.
+- [Key rotation](/guides/key-rotation) - replace a secret with or without an overlap.
+- [Scopes reference](/reference/scopes) - every route and the scope it demands.
+- [Production checklist](/guides/production-checklist) - the security items to confirm before launch.

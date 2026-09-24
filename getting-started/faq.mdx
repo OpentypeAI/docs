@@ -1,0 +1,217 @@
+---
+title: "Frequently asked questions"
+sidebarTitle: "FAQ"
+description: "Short answers on cost, the $5 sign-up credit, Neon 1.1, limits, key expiry and rotation, timeouts, verdict runs and streaming, each linking to its page."
+icon: "circle-question"
+keywords: ["FAQ", "pricing", "free credit", "Neon 1.1", "rate limit", "quota", "key expiry", "key rotation", "timeout", "streaming"]
+---
+
+These are the questions developers ask in their first week with the OpenType API, each answered in a few sentences. Every answer links to the page that covers the subject in full, so use this page to find the right place to read next.
+
+## Cost and credit
+
+<AccordionGroup>
+  <Accordion title="What does a run cost?">
+  Neon 1.1 costs **$0.042 per million tokens** for input and the same for output: 42,000 micro-USD per million. Input and output are priced separately and each is rounded up to a whole micro-USD, then the two are added:
+
+  ```text
+  cost_micros = ceil(42,000 × input_tokens / 1,000,000) + ceil(42,000 × output_tokens / 1,000,000)
+  ```
+
+  A decision run with 412 input tokens and 23 output tokens costs `ceil(17.304) + ceil(0.966) = 18 + 1 = 19` micro-USD, which is $0.000019. The response reports it:
+
+  ```json
+  {"usage": {"input_tokens": 412, "output_tokens": 23}, "cost_micros": 19, "cost_basis": "provider_reported"}
+  ```
+
+  No run costs more than $0.005 (5,000 micro-USD), the per-request ceiling. See [Models and pricing](/getting-started/models-and-pricing).
+  </Accordion>
+
+  <Accordion title="Is there free credit?">
+  Yes. Sign-up is open, and your account receives **$5 of credit** (5,000,000 micro-USD) once you verify your email address. There is one grant per email address. At the 19 micro-USD of the example above, that covers well over 200,000 runs of that size. See [Create an account](/getting-started/create-an-account).
+  </Accordion>
+
+  <Accordion title="Why was my run refused with 402 when I still have credit?">
+  A run holds its whole per-request ceiling, 5,000 micro-USD, from the moment it is admitted until it settles, and runs in flight hold theirs at the same time. If your balance minus that hold would drop below zero, the run is refused with `402 insufficient_credits`. So a run needs at least $0.005 of available credit to start, even though it then costs much less. The refused request stored nothing, so you can retry it with the same `Idempotency-Key` after adding credit. See [Handling insufficient credits](/guides/handling-insufficient-credits).
+  </Accordion>
+
+  <Accordion title="Am I charged for runs that fail or for retries?">
+  - A run that fails **before** a model served it, such as `503 no_route_available` or `503 decision_unavailable`, has its hold released and is not charged.
+  - A run that fails **after** a model served it is settled as `failed` at the cost it consumed. `503 provider_malformed_response` is one example: the model call is billed.
+  - A replay, meaning the same `Idempotency-Key` with the same body, is never charged again.
+
+  See [Idempotency](/guides/idempotency).
+  </Accordion>
+
+  <Accordion title="How do I add credit?">
+  From the **Billing** page of the [console](https://console.opentype.dev), or with `POST /v1/billing/checkout` and an amount between $5 and $1,000 in whole cents. You finish on a Stripe-hosted checkout page, and the credit arrives once the payment succeeds. Auto-recharge can top up your balance when it falls below a threshold you set. See [Credits and billing](/guides/credits-and-billing) and [Auto-recharge](/guides/auto-recharge).
+  </Accordion>
+
+  <Accordion title="Where do I see what I have spent?">
+  Every live run reports `usage` and `cost_micros`. For totals, use `GET /v1/usage` for a window (the current UTC month by default), `GET /v1/usage/daily` for one row per day, and `GET /v1/usage/ledger` for one entry per model call. All three need the `usage_read` scope. The console also has a [Usage](/console/usage) page. See [Usage reporting](/guides/usage-reporting).
+  </Accordion>
+</AccordionGroup>
+
+## The model
+
+<AccordionGroup>
+  <Accordion title="Which model answers my runs?">
+  **Neon 1.1**. Its API ids are `neon-1.1` and `neon-latest`, and `neon-latest` resolves to Neon 1.1. You can pass either as the optional `model` field on a decision run; any other value is refused with `400 unknown_model`. Leave `model` out and the run uses Neon 1.1. Live decision responses report `decision.model` as `neon-1.1`, and usage ledger entries show `model_id: "neon-1.1"` and `provider: "opentype"`. See [Models and pricing](/getting-started/models-and-pricing).
+  </Accordion>
+
+  <Accordion title="Why does my verdict run return 503?">
+  Neon 1.1 serves decision runs only. A verdict run, which is what you send when you leave out `kind`, has no model to route to and answers `503 no_route_available` every time, so retrying does not help. Send `"kind": "decision"` with a `state` and `questions` instead: a verdict schema with an `enum` usually maps to a single `choice` question. See [Verdict runs](/guides/verdict-runs) and [Decision runs](/guides/decision-runs).
+  </Accordion>
+
+  <Accordion title="How much input can a run take?">
+  A decision run's input estimate must fit Neon 1.1's context of **3,968 tokens**. The estimate is `ceil(state bytes / 4) + ceil(contract bytes / 4)`, where the contract is your `instructions`, `questions`, `draws` and `think_tokens`. Above that, the run is refused with `413 input_too_large`. The request body is capped at 1 MiB. See [Limits](/reference/limits).
+  </Accordion>
+
+  <Accordion title="How many questions can one run ask?">
+  From 1 to 64 questions, each with 2 to 20 alternatives. The questions plus `instructions`, `draws` and `think_tokens` must fit in 32 KiB, and the whole input must still fit the 3,968-token context. Keep every option and level name to a single short word: long labels fail at routing time with `503 decision_unavailable`. See [Decision questions](/getting-started/decision-questions).
+  </Accordion>
+</AccordionGroup>
+
+## Limits
+
+<AccordionGroup>
+  <Accordion title="What are the rate limits?">
+  There are none. OpenType has no rate limiter, and no request is refused for arriving too fast. The only `429` responses come from `POST /v1/runs`, and they are quota refusals:
+
+  - `organization_spend_quota_exhausted`: the per-request ceiling, at most 5,000 micro-USD, is more than the spend left in your organization's period limit.
+  - `organization_token_quota_exhausted`: the estimated input tokens plus `max_output_tokens` are more than the tokens left in the period.
+
+  The period is the current UTC calendar month. `GET /v1/quota` shows the limits and what remains; a `null` limit means there is none. See [Spend limits and quotas](/guides/spend-limits-and-quotas).
+  </Accordion>
+
+  <Accordion title="Is there a limit on parallel requests?">
+  No rate limit applies. What bounds parallel runs is credit: each run in flight holds 5,000 micro-USD until it settles, so the number of runs you can have in flight at once is roughly your available balance divided by 5,000 micro-USD, and a spend quota, if one is set, counts those holds too. See [Handling insufficient credits](/guides/handling-insufficient-credits).
+  </Accordion>
+
+  <Accordion title="How long can a run take?">
+  Each run has a deadline, `deadline_ms`: 30,000 by default, and any value is clamped to 1 to 120,000. A run that passes its deadline fails with `504 deadline_exceeded`. Set your HTTP client timeout above `deadline_ms`, for example 130 seconds for the maximum. See [Limits](/reference/limits).
+  </Accordion>
+</AccordionGroup>
+
+## API keys
+
+<AccordionGroup>
+  <Accordion title="Do API keys expire?">
+  No. A key works until it is revoked. There is no expiry field on the wire and none you can set. Revoking a key (`DELETE /v1/keys/{key_id}`, or **Revoke** in the console) is permanent: the key stops authenticating on its next request with `401 invalid_credential`, and it stays listed as an audit trail. Plan your own rotation schedule instead. See [API key security](/security/api-key-security).
+  </Accordion>
+
+  <Accordion title="How do I rotate a key?">
+  Through the API only; the console has no rotate action. `POST /v1/keys/{key_id}/rotate`, with a key that holds `keys_write`, returns the same key `id`, name and scopes with a new `secret`, shown once. **The old secret stops working immediately**, with no grace period, so every process using it fails until it has the new one. A revoked key cannot be rotated (`409 key_revoked`).
+
+  For a change with no downtime, overlap two keys instead: create a new key, deploy it everywhere, then revoke the old one. See [Key rotation](/guides/key-rotation).
+  </Accordion>
+
+  <Accordion title="I lost a key secret. Can I get it back?">
+  No. Only a SHA-256 hash of the secret is stored, and the secret is shown once, in the response that creates or rotates the key. Rotate the key to get a new secret, or create a new key and revoke the old one. See [API keys](/console/api-keys).
+  </Accordion>
+
+  <Accordion title="Which scopes does my key need?">
+  To send runs and read them back: `runs_write` and `runs_read`, the **Send requests** set in the console. Add `usage_read` for usage and quota, and `billing_read` for the balance. A key's scopes are fixed when you create it, and you can only give it scopes you hold yourself. See [Scopes](/reference/scopes).
+  </Accordion>
+</AccordionGroup>
+
+## Requests and responses
+
+<AccordionGroup>
+  <Accordion title="My request timed out. Where do I find the answer?">
+  `POST /v1/runs` is synchronous: it returns once the run has settled. If your client gave up first, the run may still have completed. Do not send it again with a new `Idempotency-Key`, which would start a second, separately charged run. Instead:
+
+  1. **Replay** the same request, with the same `Idempotency-Key` and the same body. A completed run comes back as `200` with its answer and `"replayed": true`, and it is not charged again. A run that is not finished comes back as `202` with `"state": "pending"`.
+  2. **Read** it by id with `GET /v1/runs/{run_id}` (scope `runs_read`). A completed run carries its `decision`, `usage` and `cost_micros`.
+  3. If the run is still `pending` after its deadline has passed (at most 120 s), it failed before a model served it and will not finish. Send the request again with a **new** key.
+
+  If you lost the `run_id` as well, `GET /v1/runs?limit=5` lists your newest runs first.
+
+  <CodeGroup>
+
+  ```bash cURL
+  # 1. Replay with the original key and body: 200 with the answer, or 202 while pending
+  curl -sS -i https://api.opentype.dev/v1/runs \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -H "Idempotency-Key: ticket-4822-triage" \
+    -d @ticket-4822-triage.json
+
+  # 2. Read the run by id
+  curl -sS https://api.opentype.dev/v1/runs/run_a4314b6cc08f4bd8814099a613abeb44 \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY"
+  ```
+
+  ```ts TypeScript
+  const API = "https://api.opentype.dev";
+  const auth = { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` };
+
+  // Replay with the ORIGINAL Idempotency-Key and body after a client-side timeout.
+  async function recover(idempotencyKey: string, body: object) {
+    const res = await fetch(`${API}/v1/runs`, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(130_000),
+    });
+    const run = await res.json();
+    if (res.status === 200) return run; // settled: completed (with its answer) or failed
+    if (res.status === 202) {
+      // Not finished. Read it again by id once its deadline has passed.
+      await new Promise((r) => setTimeout(r, 120_000));
+      const again = await fetch(`${API}/v1/runs/${run.run_id}`, { headers: auth }).then((r) => r.json());
+      if (again.state === "pending") throw new Error(`run ${run.run_id} is stuck: resend with a new Idempotency-Key`);
+      return again;
+    }
+    throw new Error(`${run.error.code} (${run.error.request_id})`);
+  }
+  ```
+
+  ```python Python
+  import os, time
+  import requests
+
+  API = "https://api.opentype.dev"
+  AUTH = {"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"}
+
+  def recover(idempotency_key: str, body: dict) -> dict:
+      """Replay with the ORIGINAL Idempotency-Key and body after a client-side timeout."""
+      res = requests.post(f"{API}/v1/runs", headers={**AUTH, "Content-Type": "application/json", "Idempotency-Key": idempotency_key},
+                          json=body, timeout=130)
+      run = res.json()
+      if res.status_code == 200:
+          return run  # settled: completed (with its answer) or failed
+      if res.status_code == 202:
+          time.sleep(120)  # let its deadline pass, then read it by id
+          again = requests.get(f"{API}/v1/runs/{run['run_id']}", headers=AUTH, timeout=30).json()
+          if again["state"] == "pending":
+              raise RuntimeError(f"run {run['run_id']} is stuck: resend with a new Idempotency-Key")
+          return again
+      raise RuntimeError(f"{run['error']['code']} ({run['error']['request_id']})")
+  ```
+
+  </CodeGroup>
+
+  A stored run is thinner than the live response: `GET` and replays leave out `cost_basis`, and a decision read this way has no `model`, `stages` or thought fields. See [Polling](/guides/polling).
+  </Accordion>
+
+  <Accordion title="Can I stream the answer token by token?">
+  No. The answer arrives whole, once the run has settled. `GET /v1/runs/{run_id}/stream` returns server-sent events, but it is a one-shot snapshot of the stored run: a `state` event, then a `terminal` event if the run is `completed` or `failed` (a completed run's carries the answer), and then the connection closes. It does not wait for a pending run, it sends no partial answers, and it does not support `Last-Event-ID` for resuming. To follow a run, request it again or poll `GET /v1/runs/{run_id}`. See [Streaming](/guides/streaming).
+  </Accordion>
+
+  <Accordion title="Do I have to send an Idempotency-Key?">
+  Yes, on `POST /v1/runs`: without one the request is refused with `400 idempotency_key_required`. A key is 1 to 255 bytes, unique within your organization, and never expires. Reuse it when you retry the same request, and use a new one for a new request: the same key with a different body answers `409 idempotency_conflict`. Keys built from your own ids work well, such as `ticket-4822-triage`. See [Idempotency](/guides/idempotency).
+  </Accordion>
+
+  <Accordion title="Which errors should I retry?">
+  Retry `500`, `503` and `504` with backoff and a **new** `Idempotency-Key`. Retry `402` after adding credit and `429` after the quota period resets, both with the same key. Fix any other `4xx` before sending again. Responses carry no retry hint, so decide from the status and `error.code`, and log the `x-request-id` of every failure. See [Error handling](/guides/error-handling) and [Troubleshooting](/getting-started/troubleshooting).
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+- [Troubleshooting](/getting-started/troubleshooting) - symptom, cause and fix for the errors you are most likely to meet.
+- [Glossary](/getting-started/glossary) - what `noul`, hold, period, stage and the other terms mean.
+- [Models and pricing](/getting-started/models-and-pricing) - Neon 1.1, its context, and the cost arithmetic in full.
+- [Runs](/getting-started/runs) - run states, replays, and what a run returns.
+- [Problem codes](/problems) - every error code with its own page.

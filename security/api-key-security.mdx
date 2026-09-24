@@ -1,0 +1,358 @@
+---
+title: "API key security"
+description: "How OpenType stores API keys, why the secret is shown once, how to revoke and rotate keys, and what to do when a secret leaks."
+icon: "lock"
+keywords: ["api key", "secret", "otsk_", "key_", "secret_prefix", "revoke", "rotate", "leak", "secret_in_path", "last_used_at", "sha-256"]
+---
+
+This page is for whoever creates, stores and retires OpenType API keys. It explains what a key is made of, what OpenType keeps and what it never keeps, how revocation and rotation behave, and the exact steps to take when a secret leaks.
+
+## Anatomy of a key
+
+A key has an id, a secret and a display prefix. Only the secret is a credential.
+
+| Part | Format | Example | Where it goes |
+| --- | --- | --- | --- |
+| Secret | `otsk_` + 64 lowercase hex, 69 characters | `otsk_...` | Only the `Authorization: Bearer` header |
+| Key id | `key_` + 32 hex | `key_d12af855ae0f45b9925223d65562fd0e` | URLs such as `DELETE /v1/keys/{key_id}`, logs, tickets |
+| `secret_prefix` | The first 13 characters of the secret: `otsk_` + 8 hex | `otsk_fde66231` | Key lists, so you can tell keys apart |
+
+The `otsk_` prefix makes a leaked secret easy to find with a secret scanner. The 64 hex characters that follow are randomly generated.
+
+## What OpenType stores
+
+| Stored | Not stored |
+| --- | --- |
+| The SHA-256 digest of the full secret, used to look the key up | The secret itself, in any form that can be reversed |
+| `secret_prefix`, in plaintext, so keys can be listed | |
+| The key's `id`, `name`, `principal`, `scopes`, `state`, `created_by`, `created_at`, `last_used_at` and `revoked_at` | |
+
+- Verification hashes the secret you send and compares digests in constant time.
+- The server never writes the secret to its logs.
+- Because only the digest is kept, **OpenType cannot show you a secret again**, and neither can anyone who reads the stored key data.
+
+## The secret is shown once
+
+The plaintext secret appears in exactly two responses:
+
+| Call | Status | Contains `secret` |
+| --- | --- | --- |
+| `POST /v1/keys` (create) | 201 | yes |
+| `POST /v1/keys/{key_id}/rotate` | 200 | yes, the new one |
+| `GET /v1/keys`, `GET /v1/keys/{key_id}`, `DELETE /v1/keys/{key_id}` | 200 | never |
+
+Put the secret in a secret manager, or your platform's encrypted environment variables, before you do anything else with the response. If you lose it, you cannot recover it: [rotate the key](#rotate-a-key) or create a new one.
+
+### Create a key
+
+This creates a key that can send runs and read them back. The calling credential needs `keys_write`. See [Scopes and roles](/security/scopes-and-roles) for choosing scopes.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ticket-router-prod", "scopes": ["runs_write", "runs_read"]}'
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/keys", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ name: "ticket-router-prod", scopes: ["runs_write", "runs_read"] }),
+});
+if (res.status !== 201) throw new Error(`key create failed: ${res.status}`);
+
+const key = await res.json();
+// key.secret is in this response only. Write it to your secret manager now,
+// and never log it. Log key.id instead.
+console.log(`created ${key.id} (${key.secret_prefix})`);
+```
+
+```python Python
+import os
+import requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/keys",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    json={"name": "ticket-router-prod", "scopes": ["runs_write", "runs_read"]},
+    timeout=30,
+)
+res.raise_for_status()
+
+key = res.json()
+# key["secret"] is in this response only. Write it to your secret manager now,
+# and never log it. Log key["id"] instead.
+print(f"created {key['id']} ({key['secret_prefix']})")
+```
+
+</CodeGroup>
+
+```json
+{
+  "id": "key_d12af855ae0f45b9925223d65562fd0e",
+  "name": "ticket-router-prod",
+  "principal": {"type": "user", "id": "user_example"},
+  "scopes": ["runs_read", "runs_write"],
+  "state": "active",
+  "secret_prefix": "otsk_fde66231",
+  "created_by": "user_example",
+  "created_at": "2026-09-24T10:12:03Z",
+  "last_used_at": null,
+  "revoked_at": null,
+  "secret": "otsk_..."
+}
+```
+
+The console does the same in two steps and shows the secret once on the second:
+
+<Frame>
+  <img src="/images/product/api-keys-secret-shown-once.png" alt="Newly created key showing its secret once, with a Copy secret button and the key's id, prefix and scopes" />
+</Frame>
+
+## Key object fields
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `id` | string | `key_` + 32 hex. Safe to log. |
+| `name` | string | A label. Names do not have to be unique. |
+| `principal` | object | `{"type": "user" \| "service_account", "id": "..."}`: who the key acts as |
+| `scopes` | array of strings | Sorted, without duplicates. Fixed when the key is created. |
+| `state` | string | `active` or `revoked` |
+| `secret_prefix` | string | `otsk_` + 8 hex |
+| `created_by` | string | The subject that created the key |
+| `created_at` | string | UTC, `YYYY-MM-DDTHH:MM:SSZ` |
+| `last_used_at` | string or null | `null` until the key is first used |
+| `revoked_at` | string or null | Set when the key is revoked |
+| `secret` | string | Create and rotate responses only |
+
+There is no `expires_at`: keys do not expire.
+
+## Lifecycle rules
+
+| Rule | What it means for you |
+| --- | --- |
+| **Keys never expire** | A key works until you revoke it. Put revocation in your offboarding and decommissioning steps, and review old keys regularly. |
+| **`last_used_at` is approximate** | It is updated in the background, at most once every 60 seconds per key. Use it to find unused keys, not to audit individual requests. |
+| **Revocation is immediate** | The next request with a revoked secret gets `401 invalid_credential`. |
+| **Revocation is idempotent** | Revoking a revoked key returns `200` with the original `revoked_at`. A retry after a timeout is safe. |
+| **Revoked keys stay listed** | `GET /v1/keys` includes them with `state: "revoked"`, as an audit trail. They are never deleted. |
+| **A revoked key cannot come back** | You cannot re-enable or rotate it (`409 key_revoked`). Create a new key. |
+| **Scopes cannot change** | There is no route to edit a key's scopes. Create a new key with the scopes you need, then revoke the old one. |
+
+## Find unused keys
+
+List every key in your organization and look at `state` and `last_used_at`. This needs `keys_read`. The list is newest first and never contains secrets.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  | jq -r '.keys[] | select(.state == "active") | [.id, .name, .secret_prefix, (.last_used_at // "never")] | @tsv'
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/keys", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+const { keys } = await res.json();
+
+const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000; // 90 days
+for (const k of keys) {
+  if (k.state !== "active") continue;
+  const last = k.last_used_at ? Date.parse(k.last_used_at) : 0;
+  if (last < cutoff) console.log(`review ${k.id} ${k.name} ${k.secret_prefix} last used ${k.last_used_at ?? "never"}`);
+}
+```
+
+```python Python
+import os
+from datetime import datetime, timedelta, timezone
+import requests
+
+res = requests.get(
+    "https://api.opentype.dev/v1/keys",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+res.raise_for_status()
+
+cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+for k in res.json()["keys"]:
+    if k["state"] != "active":
+        continue
+    last = k["last_used_at"]
+    if last is None or datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) < cutoff:
+        print(f"review {k['id']} {k['name']} {k['secret_prefix']} last used {last or 'never'}")
+```
+
+</CodeGroup>
+
+## Revoke a key
+
+`DELETE /v1/keys/{key_id}` needs `keys_write`. Pass the `key_` id, never the secret.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X DELETE https://api.opentype.dev/v1/keys/key_d12af855ae0f45b9925223d65562fd0e \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const keyId = "key_d12af855ae0f45b9925223d65562fd0e";
+const res = await fetch(`https://api.opentype.dev/v1/keys/${keyId}`, {
+  method: "DELETE",
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+const key = await res.json(); // key.state === "revoked"
+```
+
+```python Python
+import os
+import requests
+
+key_id = "key_d12af855ae0f45b9925223d65562fd0e"
+res = requests.delete(
+    f"https://api.opentype.dev/v1/keys/{key_id}",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+res.raise_for_status()
+assert res.json()["state"] == "revoked"
+```
+
+</CodeGroup>
+
+```json
+{
+  "id": "key_d12af855ae0f45b9925223d65562fd0e",
+  "name": "ticket-router-prod",
+  "principal": {"type": "user", "id": "user_example"},
+  "scopes": ["runs_read", "runs_write"],
+  "state": "revoked",
+  "secret_prefix": "otsk_fde66231",
+  "created_by": "user_example",
+  "created_at": "2026-09-24T10:12:03Z",
+  "last_used_at": "2026-09-24T16:40:11Z",
+  "revoked_at": "2026-09-24T17:02:55Z"
+}
+```
+
+You can also revoke from the console:
+
+<Frame>
+  <img src="/images/product/api-keys-revoke.png" alt="Revoke key dialog warning that the key stops working immediately and cannot be re-enabled" />
+</Frame>
+
+## Rotate a key
+
+`POST /v1/keys/{key_id}/rotate` issues a new secret for the same key. The `id`, `name` and `scopes` stay the same, and the response carries the new `secret` once. Rotation is available through the API only.
+
+<Warning>
+The old secret stops working the moment the rotation succeeds. There is no grace period. Every process still holding the old secret gets `401 invalid_credential` until it has the new one. For a zero-downtime change, create a second key, deploy it, then revoke the first. See [Key rotation](/guides/key-rotation).
+</Warning>
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST https://api.opentype.dev/v1/keys/key_d12af855ae0f45b9925223d65562fd0e/rotate \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const keyId = "key_d12af855ae0f45b9925223d65562fd0e";
+const res = await fetch(`https://api.opentype.dev/v1/keys/${keyId}/rotate`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+if (res.status === 409) throw new Error("key is revoked; create a new key instead");
+const key = await res.json();
+// Store key.secret now. The previous secret is already dead.
+```
+
+```python Python
+import os
+import requests
+
+key_id = "key_d12af855ae0f45b9925223d65562fd0e"
+res = requests.post(
+    f"https://api.opentype.dev/v1/keys/{key_id}/rotate",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+if res.status_code == 409:
+    raise RuntimeError("key is revoked; create a new key instead")
+res.raise_for_status()
+new_secret = res.json()["secret"]  # store it now; the previous secret is already dead
+```
+
+</CodeGroup>
+
+Do not rotate a key using that same key unless the calling process can switch to the new secret before its next request.
+
+## If a secret leaks
+
+A secret counts as leaked once it has been anywhere other than your secret store and the `Authorization` header of a request to `https://api.opentype.dev`: a commit, a chat message, a ticket, a log line, a screenshot, a URL, or client-side code.
+
+<Steps>
+  <Step title="Find the key">
+    Match the first 13 characters of the leaked value against `secret_prefix` in `GET /v1/keys` or in the console key list. Note its `id`.
+  </Step>
+  <Step title="Kill the leaked secret">
+    If you can redeploy right away, rotate the key. The leaked secret stops working immediately and the key keeps its id and scopes. If you cannot redeploy right away, create a replacement key first, deploy it, then revoke the leaked one. Every minute in between, the leaked secret still works.
+  </Step>
+  <Step title="Deploy the new secret">
+    Update every process that held the old secret. Watch for `401 invalid_credential` in your logs, which shows a process you missed.
+  </Step>
+  <Step title="Check what it did">
+    Review [usage](/guides/usage-reporting) and the run list for activity you do not recognize, and look at the key's `last_used_at`.
+  </Step>
+  <Step title="Remove the copy">
+    Delete the secret from wherever it leaked. Removing it from git history alone is not enough, because the secret stays valid until you complete step 2.
+  </Step>
+</Steps>
+
+### A secret in a URL path
+
+Key routes take the `key_` id in the path. If the path value starts with `otsk_`, the request is refused before any lookup:
+
+```json
+{"error":{"code":"secret_in_path","message":"that value looks like a key secret, not a key id; rotate it and pass the key_ id","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Treat [`400 secret_in_path`](/problems/secret_in_path) as a leak. URLs end up in access logs, proxy logs and browser history, so rotate that key now, then fix the code to pass the `id` field.
+
+## Key route errors
+
+| Status | Code | When | Fix |
+| --- | --- | --- | --- |
+| 400 | [`empty_scopes`](/problems/empty_scopes) | `scopes` is `[]` on create | Request at least one scope |
+| 400 | [`secret_in_path`](/problems/secret_in_path) | The path value starts with `otsk_` | Rotate that key, then pass the `key_` id |
+| 400 | [`malformed_key_id`](/problems/malformed_key_id) | The path value does not start with `key_` | Use the `id` field of the key object |
+| 403 | [`scope_exceeds_creator`](/problems/scope_exceeds_creator) | You asked for a scope you do not hold | Request only scopes you hold |
+| 403 | [`principal_is_not_the_caller`](/problems/principal_is_not_the_caller) | `principal` names another user | Omit `principal`, or use a service account |
+| 404 | [`key_not_found`](/problems/key_not_found) | No key with that id in your organization | Check the id; keys from another organization are not visible |
+| 409 | [`key_revoked`](/problems/key_revoked) | You tried to rotate a revoked key | Create a new key |
+
+## Storage checklist
+
+- Keep secrets in a secret manager or encrypted environment variables, never in source control or container images.
+- Never send a key to a browser or a mobile app. Call OpenType from your server.
+- Log the key `id` or `secret_prefix`, never the secret. Scrub `Authorization` headers from your own request logs.
+- Use one key per process and environment, named after what holds it, so you can revoke one without touching the others.
+- Add a secret scanner rule for `otsk_[0-9a-f]{64}` to your repositories and CI.
+
+## Related
+
+- [Key rotation](/guides/key-rotation) - the overlap pattern and the rotate endpoint, step by step.
+- [Console API keys](/console/api-keys) - create and revoke keys in the console.
+- [Scopes and roles](/security/scopes-and-roles) - decide which scopes a new key should get.
+- [secret_in_path](/problems/secret_in_path) - the full entry for a secret sent in a URL.
+- [Authentication](/security/authentication) - how a key is checked on every request.

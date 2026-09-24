@@ -1,0 +1,134 @@
+---
+title: "no_route_available"
+description: "HTTP 503 on POST /v1/runs: no model can serve this run. Every verdict run returns it today, because Neon 1.1 serves decision runs only."
+icon: "route"
+keywords: ["no_route_available", "503", "verdict run", "Neon 1.1", "kind", "POST /v1/runs", "routing"]
+---
+
+`no_route_available` means no model in the service's model list can serve this run. Read this page if a run fails with this code; in almost every case today the fix is to send a decision run.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `no_route_available` | Not while the request is a verdict run. Send `"kind": "decision"` instead. |
+
+## What happened
+
+Route: `POST /v1/runs`, verdict runs.
+
+Before it calls a model, OpenType picks one that can serve the run. `no_route_available` means none could, or that every attempt failed without a more specific error.
+
+**Every verdict run gets this code today.** Neon 1.1 serves decision runs only, and verdict runs need a capability it does not offer. `kind` defaults to `"verdict"`, so a request that leaves `kind` out is a verdict run and fails here, even when its body is otherwise valid.
+
+| Request | Result with Neon 1.1 |
+| --- | --- |
+| `"kind": "decision"` with `state` and `questions` | routed |
+| `"kind": "verdict"` with `messages` and `schema` | `503 no_route_available` |
+| no `kind`, with `messages` and `schema` | `503 no_route_available` (verdict is the default) |
+
+The run was admitted, then refused before any model was called. You are not charged, and the run's hold is released, but the run stays `pending`. A replay with the same `Idempotency-Key` returns `202` with `"state": "pending"`.
+
+## How to fix
+
+- **Send a decision run.** Set `"kind": "decision"` and express the task as typed questions about a `state`. A question that picks one of several labels is a `choice` question; a yes/no check is a `noul` question. See [Decision runs](/guides/decision-runs).
+- **Always send `kind`.** Do not rely on the default.
+- **Use a new `Idempotency-Key`** for the corrected request. The old key now points at a pending verdict run, and a decision body under it would get `409 idempotency_conflict`.
+- Retrying the same verdict request does not help: it gets the same 503.
+
+## Example
+
+```json
+{"error":{"code":"no_route_available","message":"no eligible route is available for this request","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+The same task as a decision run, with a new key per attempt and backoff on 5xx:
+
+<CodeGroup>
+```bash curl
+BODY='{"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}'
+
+for attempt in 1 2 3 4; do
+  # A new Idempotency-Key per attempt: the failed run stays pending under the old key.
+  RESP=$(curl -sS -w '\n%{http_code}' https://api.opentype.dev/v1/runs \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -H "Idempotency-Key: $(uuidgen)" \
+    -d "$BODY")
+  STATUS=$(printf '%s' "$RESP" | tail -n1)
+  printf '%s\n' "$RESP" | sed '$d'
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # 500, 503, 504: back off, then try again
+    *) break ;;                        # success or 4xx: stop
+  esac
+done
+```
+
+```typescript TypeScript
+const body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16};
+
+async function createRunWithRetry(payload: unknown, maxAttempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch("https://api.opentype.dev/v1/runs", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "Content-Type": "application/json",
+        // A new key per attempt: the failed run stays pending under the old key.
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) return data;
+
+    const { code, message, request_id } = data.error;
+    console.error(`POST /v1/runs -> ${res.status} ${code}: ${message} (${request_id})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${request_id})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const run = await createRunWithRetry(body);
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}
+
+def create_run_with_retry(payload: dict, max_attempts: int = 4) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        resp = requests.post(
+            "https://api.opentype.dev/v1/runs",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                # A new key per attempt: the failed run stays pending under the old key.
+                "Idempotency-Key": str(uuid.uuid4()),
+            },
+            json=payload,
+            timeout=130,  # longer than the largest deadline_ms (120,000 ms)
+        )
+        data = resp.json()
+        if resp.ok:
+            return data
+
+        err = data["error"]
+        print(f"POST /v1/runs -> {resp.status_code} {err['code']}: {err['message']} ({err['request_id']})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{err['code']} ({err['request_id']})")
+        time.sleep(2 ** attempt)
+
+run = create_run_with_retry(body)
+```
+</CodeGroup>
+
+## Related
+
+- [Verdict runs](/guides/verdict-runs) - the verdict contract, and why Neon 1.1 does not serve it.
+- [Decision runs](/guides/decision-runs) - the request shape that Neon 1.1 serves.
+- [Idempotency](/guides/idempotency) - when to reuse an `Idempotency-Key` and when to send a new one.
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

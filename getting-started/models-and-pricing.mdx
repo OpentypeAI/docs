@@ -1,0 +1,153 @@
+---
+title: "Models and pricing"
+description: "Neon 1.1, the model behind every decision run: its ids, its 3,968-token context, the $0.042 per million token price, and how the cost of a run is rounded."
+icon: "tags"
+keywords: ["pricing", "price", "cost", "model", "Neon 1.1", "neon-1.1", "neon-latest", "micro-USD", "context window", "cost_micros"]
+---
+
+This page covers the model that answers your runs, what it accepts, and exactly what a run costs. Read it to estimate spend before you ship, to check a `cost_micros` value, or to decide whether to pin a model id.
+
+## Neon 1.1
+
+OpenType serves one model, **Neon 1.1**. It answers decision runs: typed `noul`, `choice` and `score` questions about a state.
+
+| | |
+| --- | --- |
+| Model | Neon 1.1 |
+| API ids | `neon-1.1` (pinned), `neon-latest` (resolves to `neon-1.1` today) |
+| Serves | Decision runs (`"kind": "decision"`) |
+| Context | 3,968 tokens per decision |
+| Input price | \$0.042 per million tokens (42,000 micro-USD per million) |
+| Output price | \$0.042 per million tokens (42,000 micro-USD per million) |
+| Spend ceiling per run | 5,000 micro-USD (\$0.005) |
+
+Verdict runs are not served by Neon 1.1. A verdict run (`"kind": "verdict"`, which is also what you get when `kind` is missing) answers `503` [`no_route_available`](/problems/no_route_available).
+
+## Choose a model id
+
+Decision runs take an optional `model` field.
+
+| `model` | Behaviour |
+| --- | --- |
+| omitted | Neon 1.1 answers. |
+| `"neon-1.1"` | Neon 1.1 answers. Pin this when you want your results tied to one model version. |
+| `"neon-latest"` | The latest Neon model answers. Today that is Neon 1.1. |
+| anything else | Refused with `400` [`unknown_model`](/problems/unknown_model). |
+
+```json
+{
+  "kind": "decision",
+  "model": "neon-1.1",
+  "state": "Refund today or I dispute the charge.",
+  "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+  "max_output_tokens": 16
+}
+```
+
+Live responses report the model that answered in `decision.model`, which reads `"neon-1.1"`. In the [usage ledger](/guides/usage-reporting), each model call shows `model_id` `"neon-1.1"` and `provider` `"opentype"`.
+
+## Context window
+
+Neon 1.1 reads at most **3,968 tokens** per decision. OpenType estimates a run's input before it calls the model, at about one token per 4 bytes: the bytes of your `state` divided by 4 and rounded up, plus the bytes of the canonical `instructions`, `questions`, `draws` and `think_tokens` divided by 4 and rounded up. A decision whose estimate is above 3,968 tokens is refused with `413` [`input_too_large`](/problems/input_too_large).
+
+In practice that means about 15 KB of text for the state and questions together. To stay under it:
+
+- Send only the fields the questions need, not a whole record.
+- Keep `instructions` short. They are counted once per run, not once per question.
+- Split a very long document into several runs.
+
+Send the smaller request with a new `Idempotency-Key`: reusing the old key with a different body can answer `409 idempotency_conflict`.
+
+## How a run is priced
+
+Every amount in the API is an integer in **micro-USD**: 1,000,000 micros is \$1, 10,000 micros is 1 cent. The price is 42,000 micros per million tokens for input and for output alike, and the two parts are **rounded up separately**:
+
+```text
+input_micros  = ceil(42,000 × input_tokens  / 1,000,000)
+output_micros = ceil(42,000 × output_tokens / 1,000,000)
+cost_micros   = input_micros + output_micros
+```
+
+The [quickstart](/getting-started/quickstart) run used 412 input and 23 output tokens:
+
+```text
+input_micros  = ceil(42,000 × 412 / 1,000,000) = ceil(17.304) = 18
+output_micros = ceil(42,000 ×  23 / 1,000,000) = ceil(0.966)  =  1
+cost_micros   = 18 + 1 = 19                                     ($0.000019)
+```
+
+That is the `cost_micros: 19` in the response, next to `"usage": {"input_tokens": 412, "output_tokens": 23}`. Because each part rounds up, any run that reads and writes at least one token costs at least 2 micros.
+
+| Input tokens | Output tokens | `cost_micros` | USD |
+| --- | --- | --- | --- |
+| 100 | 5 | 5 + 1 = 6 | \$0.000006 |
+| 412 | 23 | 18 + 1 = 19 | \$0.000019 |
+| 1,000 | 20 | 42 + 1 = 43 | \$0.000043 |
+| 3,968 | 16 | 167 + 1 = 168 | \$0.000168 |
+
+The same arithmetic in code, if you want to budget before sending:
+
+<CodeGroup>
+
+```bash Shell
+# cost of 412 input and 23 output tokens, in micro-USD
+echo $(( (42000*412 + 999999)/1000000 + (42000*23 + 999999)/1000000 ))   # 19
+```
+
+```ts TypeScript
+const PRICE_MICROS_PER_MILLION = 42_000;
+const part = (tokens: number) => Math.ceil((PRICE_MICROS_PER_MILLION * tokens) / 1_000_000);
+const costMicros = (inputTokens: number, outputTokens: number) => part(inputTokens) + part(outputTokens);
+
+console.log(costMicros(412, 23)); // 19
+```
+
+```python Python
+import math
+
+PRICE_MICROS_PER_MILLION = 42_000
+
+def cost_micros(input_tokens: int, output_tokens: int) -> int:
+    part = lambda tokens: math.ceil(PRICE_MICROS_PER_MILLION * tokens / 1_000_000)
+    return part(input_tokens) + part(output_tokens)
+
+print(cost_micros(412, 23))  # 19
+```
+
+</CodeGroup>
+
+### Which cost you see
+
+`cost_basis` on a live response says where `cost_micros` came from:
+
+| `cost_basis` | Meaning |
+| --- | --- |
+| `provider_reported` | Computed from the token counts reported for the call, as above. |
+| `estimated` | A pre-call estimate at the same prices. Always the case when `draws` is greater than 1, and when no usage was reported. |
+
+`cost_basis` appears on live responses only; see [Runs](/getting-started/runs#stored-runs-are-thinner).
+
+## The per-request ceiling
+
+A single run may spend at most **5,000 micro-USD (\$0.005)**. A lower ceiling can apply to your organization, never a higher one; `GET /v1/quota` reports the one in force as `limits.request_spend_ceiling_micros`. While a run is in flight, OpenType **holds its whole ceiling** against your balance. When the run settles, the hold is released and only the actual cost is charged.
+
+Two consequences:
+
+- **A run needs \$0.005 of available credit to start**, even though it usually costs a few hundredths of a cent. Below that, `POST /v1/runs` answers `402` [`insufficient_credits`](/problems/insufficient_credits).
+- **Parallel runs hold in parallel.** Ten runs in flight hold \$0.05 between them, until each one settles.
+
+A run whose spend would pass its ceiling fails with `503` [`budget_exhausted`](/problems/budget_exhausted).
+
+## Free credit
+
+A new account receives **\$5 of free credit** once its email address is verified, one grant per email address. That is 5,000,000 micros: more than 250,000 runs like the quickstart one, at 19 micros each. See [Create an account](/getting-started/create-an-account).
+
+After the free credit, you [buy credits](/guides/credits-and-billing), from \$5 to \$1,000 at a time, or turn on [auto-recharge](/guides/auto-recharge).
+
+## Related
+
+- [Credits and billing](/guides/credits-and-billing) - buy credits and read your balance and transactions.
+- [Usage reporting](/guides/usage-reporting) - token and spend totals, per day and per run.
+- [Spend limits and quotas](/guides/spend-limits-and-quotas) - cap what your organization can spend in a period.
+- [Handling insufficient credits](/guides/handling-insufficient-credits) - what to do when a run answers 402.
+- [Limits](/reference/limits) - every size, token, and spend bound in one table.

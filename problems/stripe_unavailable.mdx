@@ -1,0 +1,105 @@
+---
+title: "stripe_unavailable"
+description: "HTTP 503 on checkout and portal: the payment provider was unreachable or gave an unexpected answer. Nothing was charged. Retry with backoff."
+icon: "credit-card"
+keywords: ["stripe_unavailable", "503", "payment provider", "checkout", "portal", "POST /v1/billing/checkout", "POST /v1/billing/portal"]
+---
+
+`stripe_unavailable` means OpenType could not open a checkout page or a billing portal session with its payment provider. Read this page when buying credit or opening the portal fails with this code.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `stripe_unavailable` | Yes, with backoff. |
+
+## What happened
+
+Routes: `POST /v1/billing/checkout`, `POST /v1/billing/portal`.
+
+Checkout pages and the billing portal are hosted by Stripe. To create one, OpenType calls the payment provider; that call failed, could not connect, or returned an answer in an unexpected shape.
+
+You received no `checkout_url` or `portal_url`, so there is no page to pay on and nothing was charged. Your balance, saved card and auto-recharge settings are unchanged.
+
+## How to fix
+
+- Retry with backoff (for example 2, 4, 8 and 16 seconds). Retrying is safe: you pay only on a checkout page you complete.
+- If it persists for several minutes, report the `request_id`.
+
+## Example
+
+```json
+{"error":{"code":"stripe_unavailable","message":"the payment provider is not available","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Creating a $25 checkout with backoff on 5xx:
+
+<CodeGroup>
+```bash curl
+for attempt in 1 2 3 4; do
+  STATUS=$(curl -sS -o checkout.json -w '%{http_code}' https://api.opentype.dev/v1/billing/checkout \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"amount_micros": 25000000}')
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # stripe_unavailable and other 5xx: back off
+    *) break ;;
+  esac
+done
+jq -r '.checkout_url // .error' checkout.json
+```
+
+```typescript TypeScript
+async function createCheckout(amountMicros: number, maxAttempts = 4): Promise<string> {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch("https://api.opentype.dev/v1/billing/checkout", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ amount_micros: amountMicros }),
+    });
+    const data = await res.json();
+    if (res.ok) return data.checkout_url;
+
+    const { code, request_id } = data.error;
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${request_id})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const url = await createCheckout(25_000_000); // $25; needs billing_write
+```
+
+```python Python
+import os
+import time
+
+import requests
+
+def create_checkout(amount_micros: int, max_attempts: int = 4) -> str:
+    for attempt in range(1, max_attempts + 1):
+        resp = requests.post(
+            "https://api.opentype.dev/v1/billing/checkout",
+            headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+            json={"amount_micros": amount_micros},
+            timeout=30,
+        )
+        data = resp.json()
+        if resp.ok:
+            return data["checkout_url"]
+
+        err = data["error"]
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{err['code']} ({err['request_id']})")
+        time.sleep(2 ** attempt)
+
+url = create_checkout(25_000_000)  # $25; needs billing_write
+```
+</CodeGroup>
+
+## Related
+
+- [Credits and billing](/guides/credits-and-billing) - checkout, the portal and transactions.
+- [Auto-recharge](/guides/auto-recharge) - top up automatically from a saved card.
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

@@ -1,0 +1,186 @@
+---
+title: "Polling for a run"
+sidebarTitle: "Polling"
+description: "POST /v1/runs waits for the answer. Recover a run with GET /v1/runs/{run_id} after a timeout, and tell a slow run from one that will stay pending."
+icon: "rotate"
+keywords: ["polling", "poll", "GET /v1/runs/{run_id}", "timeout", "202", "pending", "recover a run", "run state"]
+---
+
+`POST /v1/runs` is synchronous: it returns the finished run, so most integrations never poll. This page is for the cases where you do not get that response: a client timeout, a dropped connection, a `202` on a replay, or a second process that holds a `run_id` and needs the answer.
+
+## You usually do not need to poll
+
+The request waits until the run settles, then returns it with `200`. The wait is bounded by the run's `deadline_ms`: 30,000 ms by default, at most 120,000 ms. When the deadline passes, the request ends with [`504 deadline_exceeded`](/problems/deadline_exceeded).
+
+Set your HTTP client timeout **above** the deadline you send, for example 130 seconds for the maximum, and most of what this page covers never happens.
+
+## Run states
+
+| `state` | Meaning | What to do |
+| --- | --- | --- |
+| `completed` | The run settled with an answer. It carries `verdict` or `decision`, plus `usage` and `cost_micros`. | Read the answer. |
+| `failed` | The run settled without an answer, after a model call. | Read why from your logs, then send the request again with a new key. |
+| `pending` | The run was stored and has not settled. | See below: it is either still being served or it will never settle. |
+
+A run goes straight from `pending` to `completed` or `failed`. There is no intermediate state to watch for.
+
+## Recover after a client timeout
+
+When your client gives up before the response arrives, you do not know whether the run exists. You have two ways back.
+
+**Send the same request with the same `Idempotency-Key`.** This is the simplest, because you do not need the `run_id`:
+
+| Response | Meaning |
+| --- | --- |
+| `200`, `"state": "completed"` | The first attempt finished. You get its answer with `"replayed": true`. Nothing is charged again. |
+| `200`, `"state": "failed"` | The first attempt failed after a model call. Send again with a new key. |
+| `202`, `"state": "pending"` | A run exists under this key and has not settled. See the next section. |
+| `200`, `"replayed": false` | The first attempt never reached the service. This response is the first run. |
+
+**Or read the run by id**, if you stored the `run_id` from an earlier response:
+
+<CodeGroup>
+
+```bash cURL
+curl -sS https://api.opentype.dev/v1/runs/run_a4314b6cc08f4bd8814099a613abeb44 \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+async function getRun(runId: string) {
+  const res = await fetch(`https://api.opentype.dev/v1/runs/${runId}`, {
+    headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(`${res.status} ${body.error.code} (${body.error.request_id})`);
+  return body; // body.state is "pending", "completed" or "failed"
+}
+```
+
+```python Python
+import os
+import requests
+
+def get_run(run_id: str) -> dict:
+    res = requests.get(
+        f"https://api.opentype.dev/v1/runs/{run_id}",
+        headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+        timeout=30,
+    )
+    body = res.json()
+    if not res.ok:
+        raise RuntimeError(f"{res.status_code} {body['error']['code']} ({body['error']['request_id']})")
+    return body  # body["state"] is "pending", "completed" or "failed"
+```
+
+</CodeGroup>
+
+`GET /v1/runs/{run_id}` needs the `runs_read` scope. A completed run comes back with its answer:
+
+```json
+{
+  "run_id": "run_a4314b6cc08f4bd8814099a613abeb44",
+  "kind": "decision",
+  "state": "completed",
+  "input_digest": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+  "output_digest": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+  "decision": {
+    "answers": {
+      "urgent": {"answered_within_labels": true, "label_mass": 0.991, "probability": 0.83, "type": "noul"}
+    },
+    "draws": 1,
+    "read": "slot_constrained"
+  },
+  "usage": {"input_tokens": 412, "output_tokens": 23},
+  "cost_micros": 19,
+  "replayed": true
+}
+```
+
+A stored run is thinner than the live `POST` response. It has no `cost_basis` and no `schema_enforcement`, and a decision has no `model`, `stages`, `thought_tokens` or `thought_closed`. `replayed` is always `true` here, because the body comes from storage. A run that is not completed returns the row only, without an answer.
+
+If you need `cost_basis` or the decision stages, keep the original `POST` response. They are not stored.
+
+## A 202 that stays pending
+
+A `pending` run has one of two causes:
+
+1. **The first request is still being served.** It settles within its deadline, at most 120 seconds after it was sent.
+2. **The run failed before a model call.** For example, no route was available, the deadline passed while routing, or the upstream model refused the call. Such a run is never moved out of `pending`, and the same key answers `202` with it for good.
+
+Tell them apart with the deadline: poll until the run settles or until the deadline of the original request has passed. A run still `pending` after that will not settle. Send the request again with a **new** `Idempotency-Key`. Nothing was charged for the stuck run: its reservation was released when it failed.
+
+## A polling loop
+
+This waits for a run you hold the id of, and gives up once the deadline has clearly passed.
+
+<CodeGroup>
+
+```bash cURL
+RUN_ID=run_a4314b6cc08f4bd8814099a613abeb44
+for i in $(seq 1 13); do
+  STATE=$(curl -sS https://api.opentype.dev/v1/runs/$RUN_ID \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" | jq -r .state)
+  [ "$STATE" != "pending" ] && { echo "$STATE"; exit 0; }
+  sleep 10
+done
+echo "still pending after 130 s: send the request again with a new Idempotency-Key"
+```
+
+```ts TypeScript
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Waits for a run to settle. deadlineMs is the deadline_ms you sent (30,000 by default). */
+async function waitForRun(runId: string, sentAt: number, deadlineMs = 30_000) {
+  const giveUpAt = sentAt + deadlineMs + 10_000; // a margin past the deadline
+  for (let delay = 1_000; ; delay = Math.min(delay * 2, 10_000)) {
+    const run = await getRun(runId);
+    if (run.state !== "pending") return run; // "completed" or "failed"
+    if (Date.now() >= giveUpAt) {
+      throw new Error(`${runId} is still pending past its deadline; send again with a new key`);
+    }
+    await sleep(delay);
+  }
+}
+```
+
+```python Python
+import time
+
+def wait_for_run(run_id: str, sent_at: float, deadline_ms: int = 30_000) -> dict:
+    """Waits for a run to settle. deadline_ms is the value you sent (30,000 by default)."""
+    give_up_at = sent_at + deadline_ms / 1000 + 10  # a margin past the deadline
+    delay = 1.0
+    while True:
+        run = get_run(run_id)
+        if run["state"] != "pending":
+            return run  # "completed" or "failed"
+        if time.time() >= give_up_at:
+            raise RuntimeError(f"{run_id} is still pending past its deadline; send again with a new key")
+        time.sleep(delay)
+        delay = min(delay * 2, 10)
+```
+
+</CodeGroup>
+
+`sent_at` is the time you sent the original `POST`. If you do not know it, use the maximum deadline, 120 seconds, from when you first saw the run.
+
+## Errors
+
+| Status | Code | Cause | Fix |
+| --- | --- | --- | --- |
+| `400` | [`invalid_run_id`](/problems/invalid_run_id) | The path value is not `run_` followed by a UUID | Send the `run_id` exactly as the API returned it. |
+| `401` | [`missing_credentials`](/problems/missing_credentials), [`invalid_credential`](/problems/invalid_credential) | No key, or a rejected one | Send an active key. |
+| `403` | [`scope_denied`](/problems/scope_denied) | The key lacks `runs_read` | Use a key with `runs_read`. A key with only `runs_write` can create runs but not read them back. |
+| `404` | [`run_not_found`](/problems/run_not_found) | No such run in the key's organization | Check the id and the organization the key belongs to. |
+| `503` | [`database_unavailable`](/problems/database_unavailable), [`not_configured`](/problems/not_configured) | Stored state cannot be read right now | Retry with backoff. |
+
+Reads never return `429`.
+
+## Related
+
+- [Idempotency](/guides/idempotency) - how replays answer `200` or `202`, and when a key must be replaced.
+- [Streaming](/guides/streaming) - the same stored state as a server-sent events snapshot.
+- [Error handling](/guides/error-handling) - a retry helper that uses the same key after a timeout and a new key after a `5xx`.
+- [Runs](/getting-started/runs) - the run lifecycle and what each field means.
+- [API reference](/api-reference/introduction) - the `GET /v1/runs/{run_id}` schema.

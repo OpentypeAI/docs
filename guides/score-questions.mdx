@@ -1,0 +1,234 @@
+---
+title: "Score questions"
+description: "Rate a state on an ordered scale you define, and read the expected level, a probability for each level, and a confidence."
+icon: "gauge"
+keywords: ["score", "rating", "scale", "levels", "legend", "expected level", "ordinal", "0-indexed"]
+---
+
+A `score` question rates the state on an ordered scale you define: how upset a customer is, how severe a bug is, how well a résumé matches a role. Because the levels have an order, you get back a single number between them, not just a label. This page is for developers who need a graded judgement they can sort, average or compare with a threshold.
+
+## The shape
+
+```json
+{
+  "type": "score",
+  "instructions": "how annoyed?",
+  "criteria": ["calm", "annoyed", "furious"]
+}
+```
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `type` | `"score"` | yes | Marks this as a score question. |
+| `instructions` | string | yes | The question itself. |
+| `criteria` | array of strings | yes | The level names, in order. The first is level 0. |
+| `depends_on`, `ask_if`, `alone` | | no | Scheduling and gating. See [Conditional questions](/guides/conditional-questions). |
+
+The level names are the answer names. Other questions use them in `ask_if` to depend on this one, for example `{"tone": ["furious"]}`.
+
+### Level rules
+
+| Rule | Refusal |
+| --- | --- |
+| At least 2 and at most 20 levels | `400 invalid_decision_questions`: `every question needs at least two and at most twenty alternatives` |
+| Level names unique within the question | `400 invalid_decision_questions`: `two alternatives of one question share a name` |
+
+<Note>
+The console [Playground](/console/playground) limits a score question to 2 to 9 levels, and numbers them from 1 on screen. The API accepts 2 to 20 levels and always numbers them from 0.
+</Note>
+
+As with choice options, admission does not check whether each level name works as a single token. A level name that does not fails later with `503 decision_unavailable`. Use short, single, common words.
+
+Order the levels so that each one is clearly more than the one before it. A scale whose middle levels overlap in meaning gives you a score that drifts between them.
+
+## Ask it
+
+This run asks one `score` question about a support ticket.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-tone" \
+  -d '{
+    "kind": "decision",
+    "instructions": "You triage customer support tickets.",
+    "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+    "questions": {
+      "tone": {"type": "score", "instructions": "how annoyed?",
+               "criteria": ["calm", "annoyed", "furious"]}
+    },
+    "max_output_tokens": 16
+  }'
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4822-tone",
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    instructions: "You triage customer support tickets.",
+    state: { ticket: "I was charged twice this month and nobody answers my emails.", plan: "pro" },
+    questions: {
+      tone: { type: "score", instructions: "how annoyed?", criteria: ["calm", "annoyed", "furious"] },
+    },
+    max_output_tokens: 16,
+  }),
+});
+const run = await res.json();
+if (!res.ok) throw new Error(`${res.status} ${run.error.code} (${run.error.request_id})`);
+const tone = run.decision.answers.tone; // { type: "score", score: 1.34, ... }
+```
+
+```python Python
+import os
+import requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "ticket-4822-tone",
+    },
+    json={
+        "kind": "decision",
+        "instructions": "You triage customer support tickets.",
+        "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+        "questions": {
+            "tone": {"type": "score", "instructions": "how annoyed?",
+                     "criteria": ["calm", "annoyed", "furious"]},
+        },
+        "max_output_tokens": 16,
+    },
+    timeout=130,
+)
+run = res.json()
+if not res.ok:
+    raise RuntimeError(f"{res.status_code} {run['error']['code']} ({run['error']['request_id']})")
+tone = run["decision"]["answers"]["tone"]  # {"type": "score", "score": 1.34, ...}
+```
+
+</CodeGroup>
+
+## Read the answer
+
+In the ticket-triage run from the [decision runs guide](/guides/decision-runs), the `tone` question came back as:
+
+```json
+{
+  "type": "score",
+  "score": 1.34,
+  "legend": {"0": "calm", "1": "annoyed", "2": "furious"},
+  "probabilities": {"0": 0.12, "1": 0.42, "2": 0.46},
+  "confidence": 0.46,
+  "label_mass": 0.98,
+  "answered_within_labels": true
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `score` | The expected level: each level's index weighted by its probability. 0-indexed, and always between 0 and the number of levels minus 1. |
+| `legend` | Maps each level index, as a string, to your level name. |
+| `probabilities` | A probability for each level, keyed by the same index strings as `legend`. |
+| `confidence` | The confidence the read reports, from 0 to 1. |
+| `label_mass` | How much probability the model put on your level names together before it was renormalised over them. |
+| `answered_within_labels` | `true` when the single most likely token was one of your level names. |
+
+### Work the example
+
+The score is the probability-weighted average of the level indexes:
+
+```text
+score = 0 × 0.12 + 1 × 0.42 + 2 × 0.46 = 1.34
+```
+
+1.34 sits between level 1 (`annoyed`) and level 2 (`furious`), a little closer to annoyed. The single most likely level is `furious` at 0.46, but `annoyed` is close behind at 0.42. That split is what the score captures: a label on its own would say "furious" and hide how close the call was.
+
+<Warning>
+`probabilities` is keyed by index strings (`"0"`, `"1"`, `"2"`), not by your level names. Look names up in `legend`. And `score` starts at 0: on a three-level scale, the top level is 2, not 3.
+</Warning>
+
+## Use the score
+
+The score is a number on your scale, so you can compare it with a level boundary, sort by it, or average it over many items.
+
+<CodeGroup>
+
+```ts TypeScript
+type Score = {
+  type: "score";
+  score: number;
+  legend: Record<string, string>;
+  probabilities: Record<string, number>;
+  answered_within_labels?: boolean;
+};
+
+// The level whose index is nearest the expected score.
+function nearestLevel(a: Score): string {
+  return a.legend[String(Math.round(a.score))];
+}
+
+// The probability that the answer is at or above a named level.
+function atLeast(a: Score, level: string): number {
+  const min = Number(Object.entries(a.legend).find(([, name]) => name === level)![0]);
+  return Object.entries(a.probabilities)
+    .filter(([i]) => Number(i) >= min)
+    .reduce((sum, [, p]) => sum + p, 0);
+}
+
+// With the example: nearestLevel -> "annoyed", atLeast(tone, "annoyed") -> 0.88
+```
+
+```python Python
+def nearest_level(a: dict) -> str:
+    """The level whose index is nearest the expected score."""
+    return a["legend"][str(round(a["score"]))]
+
+def at_least(a: dict, level: str) -> float:
+    """The probability that the answer is at or above a named level."""
+    minimum = next(int(i) for i, name in a["legend"].items() if name == level)
+    return sum(p for i, p in a["probabilities"].items() if int(i) >= minimum)
+
+tone = {"type": "score", "score": 1.34,
+        "legend": {"0": "calm", "1": "annoyed", "2": "furious"},
+        "probabilities": {"0": 0.12, "1": 0.42, "2": 0.46}}
+assert nearest_level(tone) == "annoyed"
+assert abs(at_least(tone, "annoyed") - 0.88) < 1e-9
+```
+
+</CodeGroup>
+
+- **Compare with a boundary.** "Escalate when the score is at least 1.5" treats the scale as continuous. "Escalate when P(at least `furious`) is above your threshold" uses the probabilities directly. Pick thresholds from your own labelled data.
+- **Sort.** Order a queue by `score` to see the most severe items first.
+- **Average.** The mean score over a day's tickets is a steadier signal than a count of labels.
+- **Distrust** an answer with `answered_within_labels: false`, whatever its score, and send it to a person.
+
+## Score or choice
+
+Use a score when the levels have an order and the distance between them means something. When they are just different categories, a [choice](/guides/choice-questions) is the right shape: the average of "billing" and "sales" is not "technical".
+
+## What goes wrong
+
+| Status | Code | Cause | Fix |
+| --- | --- | --- | --- |
+| `400` | [`invalid_decision_questions`](/problems/invalid_decision_questions) | Fewer than 2 or more than 20 levels, or two levels with the same name | Keep 2 to 20 distinct levels. |
+| `400` | [`invalid_decision_questions`](/problems/invalid_decision_questions) | Another question's `ask_if` names a level this question does not have | Use level names from this question's `criteria`. |
+| `400` | [`invalid_body`](/problems/invalid_body) | `criteria` is missing or is not an array of strings, or the question has an unknown key | Send `criteria` as an array of level names. |
+| `503` | [`decision_unavailable`](/problems/decision_unavailable) | A level name does not work as a label, or no route could serve the decision | Shorten the level names; otherwise retry later with a new `Idempotency-Key`. |
+
+## Related
+
+- [Decision questions](/getting-started/decision-questions) - how noul, choice and score questions fit together.
+- [Decision runs](/guides/decision-runs) - every request field, the full response and the costs.
+- [Choice questions](/guides/choice-questions) - for options that have no order.
+- [Playground](/console/playground) - try a score question in the console with `+ score`.
+- [invalid_decision_questions](/problems/invalid_decision_questions) - every reason a question set is refused.

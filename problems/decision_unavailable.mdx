@@ -1,0 +1,135 @@
+---
+title: "decision_unavailable"
+description: "HTTP 503 on POST /v1/runs: the decision run could not be served. Common causes are labels that are not single tokens or a set that does not fit."
+icon: "circle-question"
+keywords: ["decision_unavailable", "503", "decision run", "labels", "single token", "questions", "POST /v1/runs"]
+---
+
+`decision_unavailable` means a decision run was admitted but no model could serve it as written. Read this page when a decision run fails with this code, especially right after you changed question ids, option names or level names.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `decision_unavailable` | Only after you change the question set, unless the cause is on the service side. Use a new `Idempotency-Key`. |
+
+## What happened
+
+Route: `POST /v1/runs`, decision runs.
+
+Several causes share this code:
+
+| Cause | What it looks like |
+| --- | --- |
+| An answer label is not a single token | You renamed an option or a score level to a long or unusual word, and the run started failing |
+| The question set does not fit the answer template | A large or unusual set fails while a smaller one succeeds |
+| No model that serves decisions is available | Every decision run fails, whatever the questions |
+| The model service rejected the decision request | A specific request fails while other decision runs succeed |
+
+The labels are the answer names Neon 1.1 must produce: `yes` and `no` for a `noul` question, the option names for a `choice` question, and the level names for a `score` question. Admission checks the count, uniqueness and size of the question set, but not whether each label is a single token or whether the set fits the template. Those two problems surface here, after admission, instead of as `400 invalid_decision_questions`.
+
+The run was refused before the model served it. You are not charged, and the hold is released, but the run stays `pending`. A replay with the same `Idempotency-Key` returns `202` with `"state": "pending"`.
+
+## How to fix
+
+1. **Shorten the labels.** Use short, common lowercase words for option and level names: `billing`, `refund`, `low`, `high`. Avoid long compound names, punctuation and rare words.
+2. **Shrink the set.** If the run still fails, split the questions across two runs, or remove the question you added last, to find the one that does not fit.
+3. **Check whether it is the set or the service.** Send the smallest valid decision (one `noul` question). If that also fails, the cause is on the service side: retry later with backoff and report the `request_id`.
+4. **Use a new `Idempotency-Key`** for every retry. A changed question set is a new request, and the old key points at a pending run.
+
+## Example
+
+```json
+{"error":{"code":"decision_unavailable","message":"no decision-capable route is available for this request","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+The smallest valid decision, useful to tell a question-set problem from a service problem:
+
+<CodeGroup>
+```bash curl
+BODY='{"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}'
+
+for attempt in 1 2 3 4; do
+  # A new Idempotency-Key per attempt: the failed run stays pending under the old key.
+  RESP=$(curl -sS -w '\n%{http_code}' https://api.opentype.dev/v1/runs \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -H "Idempotency-Key: $(uuidgen)" \
+    -d "$BODY")
+  STATUS=$(printf '%s' "$RESP" | tail -n1)
+  printf '%s\n' "$RESP" | sed '$d'
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # 500, 503, 504: back off, then try again
+    *) break ;;                        # success or 4xx: stop
+  esac
+done
+```
+
+```typescript TypeScript
+const body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16};
+
+async function createRunWithRetry(payload: unknown, maxAttempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch("https://api.opentype.dev/v1/runs", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "Content-Type": "application/json",
+        // A new key per attempt: the failed run stays pending under the old key.
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) return data;
+
+    const { code, message, request_id } = data.error;
+    console.error(`POST /v1/runs -> ${res.status} ${code}: ${message} (${request_id})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${request_id})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const run = await createRunWithRetry(body);
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}
+
+def create_run_with_retry(payload: dict, max_attempts: int = 4) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        resp = requests.post(
+            "https://api.opentype.dev/v1/runs",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                # A new key per attempt: the failed run stays pending under the old key.
+                "Idempotency-Key": str(uuid.uuid4()),
+            },
+            json=payload,
+            timeout=130,  # longer than the largest deadline_ms (120,000 ms)
+        )
+        data = resp.json()
+        if resp.ok:
+            return data
+
+        err = data["error"]
+        print(f"POST /v1/runs -> {resp.status_code} {err['code']}: {err['message']} ({err['request_id']})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{err['code']} ({err['request_id']})")
+        time.sleep(2 ** attempt)
+
+run = create_run_with_retry(body)
+```
+</CodeGroup>
+
+## Related
+
+- [Decision runs](/guides/decision-runs) - every field of a decision run and its limits.
+- [Choice questions](/guides/choice-questions) - how option names become labels.
+- [Idempotency](/guides/idempotency) - when to reuse an `Idempotency-Key` and when to send a new one.
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

@@ -1,0 +1,188 @@
+---
+title: "Problem codes"
+description: "Every OpenType error code: its HTTP status, whether a retry can help, what it means in one line, and the page that explains how to fix it."
+icon: "list"
+keywords: ["error codes", "problem codes", "status codes", "troubleshooting", "retryable"]
+---
+
+Every OpenType error carries a stable `code`, such as `run_not_found` or `insufficient_credits`. This catalog lists all of them with their HTTP status and whether retrying can help, and links each code to a page with its exact trigger, the fix, and a sample body. Use it when you have a code in hand and need to know what to do next.
+
+Each code has a page at `/problems/{code}`, and the path is the snake_case `code` itself: `/problems/scope_denied`, not `/problems/scope-denied`. For the shape of the error body and how to parse it, see [Errors](/reference/errors).
+
+```json
+{"error":{"code":"scope_denied","message":"the session lacks the runs_write scope","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+## Start with the status
+
+| Status | Usually means | First action | Where to look |
+| --- | --- | --- | --- |
+| **400** | the request is malformed | read `message`, fix the field it names | [`invalid_body`](/problems/invalid_body), [`invalid_decision_questions`](/problems/invalid_decision_questions), [`invalid_parameter`](/problems/invalid_parameter) |
+| **401** | no credential, or it was rejected | send `Authorization: Bearer otsk_...` with an active key | [`missing_credentials`](/problems/missing_credentials), [`invalid_credential`](/problems/invalid_credential) |
+| **402** | credits do not cover the run | buy credits or turn on auto-recharge, then retry | [`insufficient_credits`](/problems/insufficient_credits) |
+| **403** | the credential works but lacks permission | use a key that holds the route's [scope](/reference/scopes) | [`scope_denied`](/problems/scope_denied), [`scope_exceeds_creator`](/problems/scope_exceeds_creator) |
+| **404** | no such run or key in your organization | check the id and which organization the key belongs to | [`run_not_found`](/problems/run_not_found), [`key_not_found`](/problems/key_not_found) |
+| **409** | the request conflicts with stored state | resend the original body, or use a new `Idempotency-Key` | [`idempotency_conflict`](/problems/idempotency_conflict), [`key_revoked`](/problems/key_revoked) |
+| **413** | the body or the input is too large | shrink it below the [limits](/reference/limits) | [`body_too_large`](/problems/body_too_large), [`input_too_large`](/problems/input_too_large) |
+| **429** | a period quota for your organization is used up | wait for in-flight runs to settle or for the next period, or lower the request | [`organization_spend_quota_exhausted`](/problems/organization_spend_quota_exhausted), [`organization_token_quota_exhausted`](/problems/organization_token_quota_exhausted) |
+| **500** | an unexpected internal failure | retry once with a new `Idempotency-Key`; report the `request_id` if it repeats | [`internal_error`](/problems/internal_error) |
+| **503** | the service cannot serve this safely right now | retry with backoff and a new `Idempotency-Key` | [`no_route_available`](/problems/no_route_available), [`decision_unavailable`](/problems/decision_unavailable), [`provider_unavailable`](/problems/provider_unavailable) |
+| **504** | the run's deadline passed | raise `deadline_ms` or shrink the input, then retry with a new `Idempotency-Key` | [`deadline_exceeded`](/problems/deadline_exceeded) |
+
+A few rejections arrive as plain text with no `code` at all (400, 404, 405, 413, 415, 422). Classify those by status; see [plain-text rejections](/reference/errors#plain-text-rejections).
+
+## What "Retryable" means
+
+- **yes**: the same request can succeed later. Back off exponentially with jitter. On `POST /v1/runs`, send a **new** `Idempotency-Key` after a 5xx, because the failed run keeps the old one.
+- **later**: waiting can help, but not seconds of backoff. A 429 clears when in-flight runs settle or the quota period resets.
+- **after top-up**: the request succeeds once your balance covers it. The same `Idempotency-Key` is reusable.
+- **no**: retrying changes nothing. The request, the credential or the id has to change first.
+
+## All codes
+
+### Request errors (400)
+
+| Code | HTTP | Retryable | Meaning |
+| --- | --- | --- | --- |
+| [`invalid_body`](/problems/invalid_body) | 400 | no | the run body or list query does not match the contract; the message names the problem |
+| [`idempotency_key_required`](/problems/idempotency_key_required) | 400 | no | `POST /v1/runs` has no `Idempotency-Key` header |
+| [`invalid_idempotency_key`](/problems/invalid_idempotency_key) | 400 | no | the `Idempotency-Key` is empty, over 255 bytes, or not printable ASCII |
+| [`invalid_run_id`](/problems/invalid_run_id) | 400 | no | the run id in the path is not `run_` plus a UUID |
+| [`invalid_verdict_schema`](/problems/invalid_verdict_schema) | 400 | no | the verdict schema or the capability hints are outside the bounds |
+| [`invalid_decision_questions`](/problems/invalid_decision_questions) | 400 | no | the decision question set is outside the bounds |
+| [`unknown_model`](/problems/unknown_model) | 400 | no | a decision run names a `model` other than `neon-1.1` or `neon-latest` |
+| [`invalid_parameter`](/problems/invalid_parameter) | 400 | no | a usage route got a bad time window, `limit` or run id |
+| [`invalid_amount`](/problems/invalid_amount) | 400 | no | a checkout or auto-recharge amount is out of bounds or not whole cents |
+| [`empty_scopes`](/problems/empty_scopes) | 400 | no | a new key requested no scopes |
+| [`secret_in_path`](/problems/secret_in_path) | 400 | no | a key secret was sent where a key id belongs; rotate that key now |
+| [`malformed_key_id`](/problems/malformed_key_id) | 400 | no | the key id in the path does not start with `key_` |
+
+### Credential and permission errors (401, 403)
+
+| Code | HTTP | Retryable | Meaning |
+| --- | --- | --- | --- |
+| [`missing_credentials`](/problems/missing_credentials) | 401 | no | no `Authorization: Bearer` header, or an empty token |
+| [`invalid_credential`](/problems/invalid_credential) | 401 | no | the key is malformed, unknown or revoked, or the session expired |
+| [`no_active_organization`](/problems/no_active_organization) | 403 | no | the session is not signed in to an organization |
+| [`scope_denied`](/problems/scope_denied) | 403 | no | the credential lacks the scope the route demands |
+| [`scope_exceeds_creator`](/problems/scope_exceeds_creator) | 403 | no | a new key requested a scope its creator does not hold |
+| [`principal_is_not_the_caller`](/problems/principal_is_not_the_caller) | 403 | no | a new key would act as a different user |
+
+### Account errors (402, 429)
+
+| Code | HTTP | Retryable | Meaning |
+| --- | --- | --- | --- |
+| [`insufficient_credits`](/problems/insufficient_credits) | 402 | after top-up | the balance cannot cover the run's spend hold, up to 5,000 micros |
+| [`organization_spend_quota_exhausted`](/problems/organization_spend_quota_exhausted) | 429 | later | the per-request ceiling exceeds what is left of the period spend limit |
+| [`organization_token_quota_exhausted`](/problems/organization_token_quota_exhausted) | 429 | later | the estimated input plus `max_output_tokens` exceeds the tokens left this period |
+
+### Lookup and state errors (404, 409)
+
+| Code | HTTP | Retryable | Meaning |
+| --- | --- | --- | --- |
+| [`run_not_found`](/problems/run_not_found) | 404 | no | no run with that id in your organization |
+| [`key_not_found`](/problems/key_not_found) | 404 | no | no key with that id in your organization |
+| [`idempotency_conflict`](/problems/idempotency_conflict) | 409 | no | the `Idempotency-Key` was already used with a different body |
+| [`key_revoked`](/problems/key_revoked) | 409 | no | a revoked key cannot be rotated; create a new one |
+
+### Size errors (413)
+
+| Code | HTTP | Retryable | Meaning |
+| --- | --- | --- | --- |
+| [`body_too_large`](/problems/body_too_large) | 413 | no | the run body is over 1 MiB |
+| [`input_too_large`](/problems/input_too_large) | 413 | no | the input is over 64,000 estimated tokens, or too large for Neon 1.1 |
+
+### Run execution errors (500, 503, 504)
+
+| Code | HTTP | Retryable | Meaning |
+| --- | --- | --- | --- |
+| [`internal_error`](/problems/internal_error) | 500 | yes | an unexpected internal state; report the `request_id` |
+| [`no_route_available`](/problems/no_route_available) | 503 | yes | no model can serve this verdict run right now |
+| [`decision_unavailable`](/problems/decision_unavailable) | 503 | yes | no model could serve this decision run, or it refused the question set |
+| [`budget_exhausted`](/problems/budget_exhausted) | 503 | yes | the run's own spend budget could not cover the model call |
+| [`verdict_schema_violation`](/problems/verdict_schema_violation) | 503 | yes | no attempt produced a document that satisfies your schema; see `violations` |
+| [`catalog_unavailable`](/problems/catalog_unavailable) | 503 | yes | the service's model list could not be read |
+| [`provider_unauthorized`](/problems/provider_unauthorized) | 503 | yes | the model service refused OpenType's credentials |
+| [`provider_rate_limited`](/problems/provider_rate_limited) | 503 | yes | the model service is limiting OpenType's traffic |
+| [`provider_rejected_request`](/problems/provider_rejected_request) | 503 | yes | the model service refused the request as invalid |
+| [`provider_unavailable`](/problems/provider_unavailable) | 503 | yes | the model service failed or could not be reached |
+| [`provider_malformed_response`](/problems/provider_malformed_response) | 503 | yes | the model's reply could not be decoded; the call is still billed |
+| [`deadline_exceeded`](/problems/deadline_exceeded) | 504 | yes | the run's `deadline_ms` passed before an answer arrived |
+
+### Service errors (503)
+
+| Code | HTTP | Retryable | Meaning |
+| --- | --- | --- | --- |
+| [`not_configured`](/problems/not_configured) | 503 | yes | something a run needs is not configured on the service |
+| [`database_unavailable`](/problems/database_unavailable) | 503 | yes | the data store could not be reached |
+| [`database_not_configured`](/problems/database_not_configured) | 503 | yes | the data store is not configured for this route |
+| [`billing_not_configured`](/problems/billing_not_configured) | 503 | yes | billing is not configured on the service |
+| [`stripe_unavailable`](/problems/stripe_unavailable) | 503 | yes | Stripe checkout or the billing portal could not be reached |
+| [`auth_not_configured`](/problems/auth_not_configured) | 503 | yes | the service cannot verify this kind of credential right now |
+| [`trust_keys_unavailable`](/problems/trust_keys_unavailable) | 503 | yes | the keys used to verify credentials are temporarily unavailable |
+
+## Handle codes in code
+
+Map the codes your client can act on, and fall back to the status for everything else.
+
+<CodeGroup>
+
+```bash cURL
+# A key without runs_write asking for a run:
+curl -sS https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"kind": "decision", "state": "ticket 4821", "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}}, "max_output_tokens": 16}'
+# {"error":{"code":"scope_denied","message":"the session lacks the runs_write scope","request_id":"req_..."}}
+```
+
+```ts TypeScript
+type Action = "fix_request" | "fix_credential" | "top_up" | "wait" | "retry_new_key";
+
+function classify(status: number, code: string | undefined): Action {
+  switch (code) {
+    case "insufficient_credits":
+      return "top_up";
+    case "organization_spend_quota_exhausted":
+    case "organization_token_quota_exhausted":
+      return "wait";
+    case "missing_credentials":
+    case "invalid_credential":
+    case "scope_denied":
+      return "fix_credential";
+  }
+  // Unknown or missing code: fall back to the status family.
+  if (status >= 500) return "retry_new_key";
+  if (status === 429) return "wait";
+  if (status === 401 || status === 403) return "fix_credential";
+  return "fix_request";
+}
+```
+
+```python Python
+def classify(status: int, code: str | None) -> str:
+    if code == "insufficient_credits":
+        return "top_up"
+    if code in ("organization_spend_quota_exhausted", "organization_token_quota_exhausted"):
+        return "wait"
+    if code in ("missing_credentials", "invalid_credential", "scope_denied"):
+        return "fix_credential"
+    # Unknown or missing code: fall back to the status family.
+    if status >= 500:
+        return "retry_new_key"
+    if status == 429:
+        return "wait"
+    if status in (401, 403):
+        return "fix_credential"
+    return "fix_request"
+```
+
+</CodeGroup>
+
+## Related
+
+- [Errors](/reference/errors) - the error envelope, plain-text rejections and the retry rules.
+- [Error handling](/guides/error-handling) - a complete retry loop for `POST /v1/runs`.
+- [Idempotency](/guides/idempotency) - when a retry needs a new `Idempotency-Key`.
+- [Troubleshooting](/getting-started/troubleshooting) - symptoms that do not come with a code.

@@ -1,0 +1,102 @@
+---
+title: "Guides"
+description: "Task-based guides for OpenType: write decision runs, make requests safe to retry, control spend, and prepare an integration for production."
+icon: "book-open"
+keywords: ["guides", "how-to", "decision runs", "retries", "billing", "production"]
+---
+
+These guides take one task at a time and walk it through end to end: the request to send, the response to read, the limits that apply, and what to do when a call is refused. Read them once you have made a first call with the [quickstart](/getting-started/quickstart) and want to build a real integration against `https://api.opentype.dev`.
+
+Every example sends a key from the `OPENTYPE_API_KEY` environment variable. Create one on the [API keys](/console/api-keys) page of the console.
+
+## Decision runs
+
+Ask typed questions about a JSON state and get a probability for every answer, in one call to Neon 1.1.
+
+<CardGroup cols={2}>
+  <Card title="Decision runs" icon="list-check" href="/guides/decision-runs">
+    Every request field, the response, stages, costs, and the limits that shape a question set.
+  </Card>
+  <Card title="Yes/no questions (noul)" icon="toggle-on" href="/guides/noul-questions">
+    Read P(yes) and turn it into an action with thresholds you choose.
+  </Card>
+  <Card title="Choice questions" icon="list-ul" href="/guides/choice-questions">
+    Pick one of 2 to 20 named options, with a probability for each.
+  </Card>
+  <Card title="Score questions" icon="gauge" href="/guides/score-questions">
+    Rate on an ordered scale and read the expected level.
+  </Card>
+  <Card title="Conditional questions" icon="code-branch" href="/guides/conditional-questions">
+    Order questions with `depends_on` and ask them only when `ask_if` holds.
+  </Card>
+  <Card title="Verdict runs" icon="file-code" href="/guides/verdict-runs">
+    The schema-validated JSON contract, and why Neon 1.1 does not serve it today.
+  </Card>
+</CardGroup>
+
+## Reliable requests
+
+Send runs that survive timeouts, retries and restarts without paying twice.
+
+<CardGroup cols={2}>
+  <Card title="Idempotency" icon="fingerprint" href="/guides/idempotency">
+    The required `Idempotency-Key` header, replays, and when to mint a new key.
+  </Card>
+  <Card title="Error handling" icon="triangle-exclamation" href="/guides/error-handling">
+    Branch on `code`, decide what to retry, and log the `request_id`.
+  </Card>
+  <Card title="Polling" icon="rotate" href="/guides/polling">
+    Recover a run you lost track of with `GET /v1/runs/{run_id}`.
+  </Card>
+  <Card title="Streaming" icon="wave-square" href="/guides/streaming">
+    Observe a run's stored state over server-sent events.
+  </Card>
+  <Card title="Pagination" icon="arrow-right-arrow-left" href="/guides/pagination">
+    Walk the run list with `limit` and `offset`, and size usage ledger reads.
+  </Card>
+</CardGroup>
+
+## Spend and billing
+
+Pay for runs with prepaid credit and keep track of where it goes.
+
+<CardGroup cols={2}>
+  <Card title="Credits and billing" icon="credit-card" href="/guides/credits-and-billing">
+    How credit is bought, held for a run, and drawn down.
+  </Card>
+  <Card title="Auto-recharge" icon="bolt" href="/guides/auto-recharge">
+    Top up automatically when the balance falls below a threshold.
+  </Card>
+  <Card title="Handling insufficient credits" icon="wallet" href="/guides/handling-insufficient-credits">
+    What a `402 insufficient_credits` means and how to recover.
+  </Card>
+  <Card title="Usage reporting" icon="chart-line" href="/guides/usage-reporting">
+    Totals, the per-call ledger, and one run's cost.
+  </Card>
+  <Card title="Spend limits and quotas" icon="gauge-high" href="/guides/spend-limits-and-quotas">
+    The per-request ceiling and the period quotas that refuse with `429`.
+  </Card>
+</CardGroup>
+
+## Go to production
+
+Prepare keys and code for real traffic.
+
+<CardGroup cols={2}>
+  <Card title="Key rotation" icon="key" href="/guides/key-rotation">
+    Rotate a key and roll the new secret out to your services.
+  </Card>
+  <Card title="Production checklist" icon="clipboard-check" href="/guides/production-checklist">
+    What to check before real traffic reaches OpenType.
+  </Card>
+  <Card title="Code examples" icon="code" href="/guides/code-examples">
+    Ready-to-adapt requests in curl, TypeScript and Python.
+  </Card>
+</CardGroup>
+
+## Related
+
+- [Quickstart](/getting-started/quickstart) - make a first decision run before you start on a guide.
+- [Decision questions](/getting-started/decision-questions) - the concepts behind noul, choice and score questions.
+- [Errors](/reference/errors) - every error code the API returns and what it means.
+- [API reference](/api-reference/introduction) - the full request and response contract for every route.

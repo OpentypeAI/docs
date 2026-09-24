@@ -1,0 +1,307 @@
+---
+title: "Error handling"
+description: "Read the error envelope, branch on code, decide what to retry, and drop in a retry helper for POST /v1/runs in TypeScript or Python."
+icon: "triangle-exclamation"
+keywords: ["error handling", "retries", "backoff", "error envelope", "request_id", "5xx", "503", "504", "plain-text errors"]
+---
+
+This guide turns the OpenType error contract into client code: how to read an error, which failures a retry can fix, and a retry helper for `POST /v1/runs` that never charges you twice. Read it before you put an integration in front of real traffic. For the list of every code, see [Errors](/reference/errors).
+
+## The error envelope
+
+Every JSON error has one shape:
+
+```json
+{
+  "error": {
+    "code": "idempotency_conflict",
+    "message": "this idempotency key was already used with a different body",
+    "request_id": "req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"
+  }
+}
+```
+
+| Field | Always present | What it is |
+| --- | --- | --- |
+| `code` | yes | Stable snake_case identifier. **Branch on this and nothing else.** |
+| `message` | yes | A sentence for a developer. It may contain numbers or a scope name, and its wording can change. Log it, never parse it. |
+| `request_id` | yes | The id of this request, also sent as the `x-request-id` response header. Log it and quote it when you report a problem. See [Request ids](/reference/request-ids). |
+| `violations` | only on `verdict_schema_violation` | Up to 10 JSON Pointers into the rejected verdict, such as `/risk/score`. Omitted when the model returned no document at all. |
+
+```json
+{"error":{"code":"verdict_schema_violation","message":"the verdict did not satisfy the schema after the permitted attempts","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d","violations":["/risk/score","/label"]}}
+```
+
+What the response does **not** carry:
+
+- No `retryable` field. The status and the code tell you whether to retry.
+- No `Retry-After` header. You choose the backoff.
+- No `WWW-Authenticate` header on a `401`.
+
+## Match on code, never on message
+
+```ts
+// Good: stable.
+if (err.code === "insufficient_credits") promptForTopUp();
+
+// Bad: breaks when the wording changes.
+if (err.message.includes("credit balance")) promptForTopUp();
+```
+
+Messages can mislead as well as change: every `provider_*` code shares the message "the provider call failed", and the `deadline_exceeded` message says "before a route was chosen" even when the model call is what timed out. When you meet a code your client does not know, fall back to its status family below.
+
+## Errors that are not JSON
+
+A few rejections come from the web layer before OpenType's own handlers run. Their bodies are plain text or empty, and they have no `request_id` in the body. The `x-request-id` response header is still set.
+
+| Status | Body | Typical cause | Where |
+| --- | --- | --- | --- |
+| `400` | begins `Failed to parse the request body as JSON` | malformed JSON | keys and billing routes |
+| `400` | begins `Failed to deserialize query string` | an unknown or malformed query parameter | usage routes |
+| `413` | begins `Failed to buffer the request body` | a body over 1 MiB | every route except `POST /v1/runs` |
+| `415` | begins ``Expected request with `Content-Type: application/json` `` | missing or wrong `Content-Type` | keys and billing routes |
+| `422` | begins `Failed to deserialize the JSON body into the target type` | a wrong type, a missing field, or an unknown field | keys and billing routes |
+| `404` | empty | unknown path | any |
+| `405` | empty | known path, wrong method | any |
+
+The runs routes (`/v1/runs...`) wrap the same failures into JSON: `400 invalid_body` and `413 body_too_large`. Everywhere else, parse defensively: try JSON, and if that fails, keep the status, the raw text and the `x-request-id` header.
+
+## What to do, by status
+
+| Status | Meaning | Retry automatically? | Action |
+| --- | --- | --- | --- |
+| `400` | the request is malformed | no | Fix the request. For `POST /v1/runs`, nothing was stored, so the same key is still free. |
+| `401` | missing or rejected credential | no | Send `Authorization: Bearer otsk_...` with an active key. A revoked or rotated key fails until you deploy the new one. |
+| `402` | credits cannot cover the run | no | Add credits or turn on auto-recharge, then send again with the same key. See [Handling insufficient credits](/guides/handling-insufficient-credits). |
+| `403` | the credential lacks a scope or organization | no | Use a key that holds the [scope](/reference/scopes) named in the message. |
+| `404` | no such run or key in your organization | no | Check the id and which organization the key belongs to. |
+| `409` | conflicts with stored state | no | `idempotency_conflict`: resend the original body, or use a new key. `key_revoked`: create a new key. |
+| `413` | body or input too large | no | Shrink it. See [Limits](/reference/limits). |
+| `429` | a period quota refused the run | not in a loop: back off for minutes, or surface it | Wait for in-flight runs to settle or for the next period, or lower `max_output_tokens`. See [Spend limits and quotas](/guides/spend-limits-and-quotas). |
+| `500` | unexpected internal failure | yes, with a new key, a few times at most | Report the `request_id` if it repeats. |
+| `503` | the service cannot serve this safely right now | yes, with backoff and a **new** key | Most codes clear on their own. `verdict_schema_violation` and `budget_exhausted` usually need a change to the request. |
+| `504` | the run's deadline passed | yes, with a **new** key | Raise `deadline_ms` (at most 120,000) or shrink the input. |
+| no response | client timeout or dropped connection | yes, with the **same** key | You get the stored run if the first attempt reached the service. See [Polling](/guides/polling). |
+
+A `429` is always a quota refusal, never a rate limit, so retrying it quickly does not help. Nothing was stored, so a later retry may reuse the same key. The helper below leaves `429`, like every other `4xx`, to your code.
+
+## Why a 5xx needs a new idempotency key
+
+`POST /v1/runs` stores the run before it calls the model. When a `5xx` comes after that point, the stored run does not run again under the same key:
+
+- If the run failed **after** a model call, it is settled as `failed`. The same key replays it as `200` with `"state": "failed"`.
+- If the run failed **before** a model call (`no_route_available`, `decision_unavailable`, `deadline_exceeded`, most `provider_*` codes), it stays `pending`. The same key replays it as `202` indefinitely.
+
+So a retry after a `5xx` must use a new key. A retry after **no response** must use the same key, because you do not know whether the first attempt was stored. [Idempotency](/guides/idempotency) has the full table.
+
+## A retry helper for POST /v1/runs
+
+The helper:
+
+- sends the body with a key derived from your business id,
+- retries `500`, `503` and `504` with exponential backoff and jitter, and a new key on each attempt (`<base>:r1`, `<base>:r2`, ...),
+- retries a timeout or a dropped connection with the **same** key,
+- never retries a `4xx`,
+- returns the run, including a `200` with `"state": "failed"` or a `202` with `"state": "pending"`, for you to handle.
+
+Keep the base key short enough to take the suffix: the whole header must be 255 bytes or fewer.
+
+<CodeGroup>
+
+```bash cURL
+# One attempt, with the checks a shell script can make.
+# A 5xx: send again with a new key, e.g. "$KEY:r1". A timeout (curl exit 28): send again with the same key.
+KEY="support-bot:ticket-4822-triage"
+STATUS=$(curl -sS -m 130 -o run.json -w "%{http_code}" https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $KEY" \
+  -d '{
+    "kind": "decision",
+    "state": {"ticket": "I was charged twice this month."},
+    "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+    "max_output_tokens": 16
+  }')
+case "$STATUS" in
+  200|202) jq '{run_id, state, replayed}' run.json ;;
+  500|503|504) echo "retry with a new key: $KEY:r1 ($(jq -r .error.code run.json))" ;;
+  *) echo "fix first: $STATUS $(jq -r '.error.code + " " + .error.request_id' run.json)"; exit 1 ;;
+esac
+```
+
+```ts TypeScript
+const API = "https://api.opentype.dev";
+const RETRY_STATUSES = new Set([500, 503, 504]);
+
+export class OpenTypeError extends Error {
+  constructor(
+    public status: number,
+    public code: string | null, // null when the body was not JSON
+    public requestId: string | null,
+    message: string,
+  ) {
+    super(`${status} ${code ?? "non_json_error"}: ${message}`);
+  }
+}
+
+async function readError(res: Response): Promise<OpenTypeError> {
+  const text = await res.text();
+  try {
+    const { error } = JSON.parse(text);
+    return new OpenTypeError(res.status, error.code, error.request_id, error.message);
+  } catch {
+    // Plain-text or empty body: keep the status and the header id.
+    return new OpenTypeError(res.status, null, res.headers.get("x-request-id"), text);
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function createRun(baseKey: string, body: unknown, maxAttempts = 4) {
+  let attempt = 0; // bumps the key suffix only after a 5xx
+  for (let tries = 0; ; tries++) {
+    const key = attempt === 0 ? baseKey : `${baseKey}:r${attempt}`;
+    let res: Response;
+    try {
+      res = await fetch(`${API}/v1/runs`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": key,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(130_000), // above the 120 s maximum deadline
+      });
+    } catch (err) {
+      // Timeout or dropped connection: the run may exist. Same key.
+      if (tries + 1 >= maxAttempts) throw err;
+      await sleep(backoff(tries));
+      continue;
+    }
+    if (res.ok) return res.json(); // 200 or 202: check run.state
+    const error = await readError(res);
+    if (!RETRY_STATUSES.has(res.status) || tries + 1 >= maxAttempts) throw error;
+    console.warn(`retrying after ${error.message} (${error.requestId})`);
+    attempt++; // the failed run will not run again under its key
+    await sleep(backoff(tries));
+  }
+}
+
+function backoff(tries: number): number {
+  const base = 1000 * 2 ** tries; // 1 s, 2 s, 4 s, ...
+  return base / 2 + Math.random() * (base / 2);
+}
+```
+
+```python Python
+import os
+import random
+import time
+
+import requests
+
+API = "https://api.opentype.dev"
+RETRY_STATUSES = {500, 503, 504}
+
+
+class OpenTypeError(Exception):
+    def __init__(self, status: int, code: str | None, request_id: str | None, message: str):
+        super().__init__(f"{status} {code or 'non_json_error'}: {message}")
+        self.status, self.code, self.request_id = status, code, request_id
+
+
+def read_error(res: requests.Response) -> OpenTypeError:
+    try:
+        error = res.json()["error"]
+        return OpenTypeError(res.status_code, error["code"], error["request_id"], error["message"])
+    except (ValueError, KeyError):
+        # Plain-text or empty body: keep the status and the header id.
+        return OpenTypeError(res.status_code, None, res.headers.get("x-request-id"), res.text)
+
+
+def backoff(tries: int) -> float:
+    base = 2**tries  # 1 s, 2 s, 4 s, ...
+    return base / 2 + random.random() * base / 2
+
+
+def create_run(base_key: str, body: dict, max_attempts: int = 4) -> dict:
+    attempt = 0  # bumps the key suffix only after a 5xx
+    for tries in range(max_attempts):
+        key = base_key if attempt == 0 else f"{base_key}:r{attempt}"
+        try:
+            res = requests.post(
+                f"{API}/v1/runs",
+                headers={
+                    "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": key,
+                },
+                json=body,
+                timeout=130,  # above the 120 s maximum deadline
+            )
+        except (requests.Timeout, requests.ConnectionError):
+            # The run may exist. Same key.
+            if tries + 1 >= max_attempts:
+                raise
+            time.sleep(backoff(tries))
+            continue
+        if res.ok:
+            return res.json()  # 200 or 202: check run["state"]
+        error = read_error(res)
+        if res.status_code not in RETRY_STATUSES or tries + 1 >= max_attempts:
+            raise error
+        print(f"retrying after {error} ({error.request_id})")
+        attempt += 1  # the failed run will not run again under its key
+        time.sleep(backoff(tries))
+    raise RuntimeError("unreachable")
+```
+
+</CodeGroup>
+
+Use it with a key derived from your own id:
+
+```python
+run = create_run(
+    "support-bot:ticket-4822-triage",
+    {
+        "kind": "decision",
+        "state": {"ticket": "I was charged twice this month."},
+        "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+        "max_output_tokens": 16,
+    },
+)
+if run["state"] != "completed":
+    ...  # "failed" (a replayed failure) or "pending" (see the Polling guide)
+```
+
+Make the suffixed keys deterministic, as above. If your process restarts halfway through the retries, it sends the same sequence of keys again and picks up the stored runs instead of creating new ones.
+
+## Retrying other routes
+
+Only `POST /v1/runs` takes an idempotency key. For the rest:
+
+| Route | Safe to retry a `5xx` or a timeout? |
+| --- | --- |
+| `GET` routes (runs, keys, usage, quota, billing) | Yes. They read stored state. |
+| `DELETE /v1/keys/{key_id}` | Yes. Revoking again returns the same revoked key. |
+| `POST /v1/keys` | No: a retry can create a second key. List keys first and look for the name you sent. |
+| `POST /v1/keys/{key_id}/rotate` | No: each call issues a new secret and disables the previous one. Rotate again only if you did not receive a secret. |
+
+## What goes wrong
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `JSON.parse` throws inside your error handler | A plain-text or empty body from the web layer | Parse defensively, as `readError` does. |
+| A retry after a `503` returns `202` forever | The retry reused the key of a run that failed before a model call | Use a new key after a `5xx`. |
+| A retry after a `503` returns `200` with no answer | The retry reused the key of a run that failed after a model call | Use a new key after a `5xx`, and check `state`. |
+| Double charges after timeouts | The client minted a new key on a timeout | Reuse the key when there was no response. |
+| Tight loops on `429` | Treating a quota refusal as a rate limit | Surface the `429`. It clears when runs settle or the period resets. |
+
+## Related
+
+- [Errors](/reference/errors) - every code, grouped by status, with its message.
+- [Problem codes](/problems) - one page per code, with causes and fixes.
+- [Idempotency](/guides/idempotency) - when a key replays, conflicts, or must be replaced.
+- [Request ids](/reference/request-ids) - send your own `x-request-id` and find a request later.
+- [API reference](/api-reference/introduction) - request and response schemas for every route.

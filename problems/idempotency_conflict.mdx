@@ -1,0 +1,135 @@
+---
+title: "idempotency_conflict"
+description: "HTTP 409 on POST /v1/runs: this Idempotency-Key was already used with a different body. What counts as the same body, and when to mint a new key."
+icon: "code-compare"
+keywords: ["idempotency_conflict", "409", "Idempotency-Key", "conflict", "replay", "POST /v1/runs", "idempotency"]
+---
+
+`idempotency_conflict` means your organization already used this `Idempotency-Key` for a run with a different body. Read this page if you retry runs, or if you build keys from ids that can repeat.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `409` | `idempotency_conflict` | Not with this body and key. Send the original body, or use a new key. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+An `Idempotency-Key` belongs to one request for the life of your organization; keys never expire. When a key arrives again, OpenType compares the new body with the one stored for that key:
+
+| Same key, and | Result |
+| --- | --- |
+| the same body, run finished | `200` with the stored run and `"replayed": true`; nothing runs or is charged again, and a failed run replays as `failed` |
+| the same body, run not finished | `202` with the stored run as it is |
+| a different body | `409 idempotency_conflict` |
+
+"The same body" means the same input and the same contract:
+
+| Compared | Not compared |
+| --- | --- |
+| `kind` | `max_output_tokens` |
+| the prompt: `system` and `messages`, or the decision `state` | `deadline_ms` |
+| the verdict `schema` | `capability_hint` |
+| the decision `instructions`, `questions` in order, `draws` and `think_tokens` | |
+
+Changing any value in the left column under an old key gets this error. Changing only a value in the right column does not: you get the stored run back, as it first ran. The request was refused before a new run existed, and the original run is unchanged.
+
+## How to fix
+
+- **Retrying the same request:** send exactly the original body with the original key. You get the stored run back.
+- **Sending a new request:** use a new key. A changed prompt, schema or question set is a new request.
+- **Keys that repeat by accident:** if two different requests can derive the same key, add the part that differs to the key, such as the question-set version: `ticket-4822-triage-v2`.
+
+<Note>
+A content-derived key repeats for the same body. When a run fails with a 5xx that tells you to retry with a new key, add an attempt counter to the key, such as `-a2`. Otherwise the replay returns the stored `pending` run with `202`.
+</Note>
+
+A 409 on this code is not fixed by waiting. Retrying the same body and key gives the same answer.
+
+## Example
+
+```json
+{"error":{"code":"idempotency_conflict","message":"this idempotency key was already used with a different body","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Deriving the key from both the business id and the request contents, so a changed body always gets a new key and a retry always reuses the old one:
+
+<CodeGroup>
+```bash curl
+BODY='{"kind":"decision","state":{"ticket":"I was charged twice this month."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}'
+KEY="ticket-4822-$(printf '%s' "$BODY" | sha256sum | cut -c1-16)"
+
+curl https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $KEY" \
+  -d "$BODY"
+```
+
+```typescript TypeScript
+import { createHash } from "node:crypto";
+
+const payload = {
+  kind: "decision",
+  state: { ticket: "I was charged twice this month." },
+  questions: { urgent: { type: "noul", instructions: "reply within the hour?" } },
+  max_output_tokens: 16,
+};
+const body = JSON.stringify(payload);
+const idempotencyKey = `ticket-4822-${createHash("sha256").update(body).digest("hex").slice(0, 16)}`;
+
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": idempotencyKey,
+  },
+  body,
+});
+
+const run = await res.json();
+if (!res.ok) throw new Error(`${run.error.code}: ${run.error.message}`);
+console.log(run.run_id, run.replayed);
+```
+
+```python Python
+import hashlib
+import json
+import os
+
+import requests
+
+payload = {
+    "kind": "decision",
+    "state": {"ticket": "I was charged twice this month."},
+    "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+    "max_output_tokens": 16,
+}
+body = json.dumps(payload, sort_keys=True)
+idempotency_key = f"ticket-4822-{hashlib.sha256(body.encode()).hexdigest()[:16]}"
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotency_key,
+    },
+    data=body,
+    timeout=60,
+)
+
+run = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{run['error']['code']}: {run['error']['message']}")
+print(run["run_id"], run["replayed"])
+```
+</CodeGroup>
+
+## Related
+
+- [Idempotency](/guides/idempotency) - replays, conflicts and key lifetimes in full.
+- [Error handling](/guides/error-handling) - when a retry reuses the key and when it needs a new one.
+- [idempotency_key_required](/problems/idempotency_key_required) - the header is missing.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

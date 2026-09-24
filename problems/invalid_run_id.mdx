@@ -1,0 +1,90 @@
+---
+title: "invalid_run_id"
+description: "HTTP 400 on GET /v1/runs/{run_id} and its stream: the path value is not run_ followed by a UUID. Which forms are accepted and how to fix it."
+icon: "hashtag"
+keywords: ["invalid_run_id", "run_id", "400", "GET /v1/runs/{run_id}", "stream", "run identifier"]
+---
+
+`invalid_run_id` means the `run_id` in the path of a run lookup is not shaped like a run id. Read this page if you read runs back by id, for example to recover a result after a client timeout.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `400` | `invalid_run_id` | No. Fix the id first. |
+
+## What happened
+
+Routes:
+
+- `GET /v1/runs/{run_id}`
+- `GET /v1/runs/{run_id}/stream`
+
+A run id is `run_` followed by a UUID. The value in the path is something else, so OpenType did not look anything up. Both of these forms are accepted:
+
+| Form | Example | Where you see it |
+| --- | --- | --- |
+| `run_` + 32 hex | `run_a4314b6cc08f4bd8814099a613abeb44` | `run_id` in run responses and run lists |
+| `run_` + a hyphenated UUID | `run_a4314b6c-c08f-4bd8-8140-99a613abeb44` | `run_id` in usage responses |
+
+Common causes:
+
+- The `run_` prefix is missing or misspelled.
+- The id was cut short, or carries extra characters such as quotes or whitespace.
+- Another value was used in its place, such as `input_digest` or the `x-request-id`.
+
+A well-formed id that does not belong to your organization is a different code: [`run_not_found`](/problems/run_not_found). On `GET /v1/usage/runs/{run_id}` a malformed id gets [`invalid_parameter`](/problems/invalid_parameter) instead.
+
+## How to fix
+
+Use the `run_id` exactly as the API returned it, from the `POST /v1/runs` response, a `GET /v1/runs` row, or a usage entry. Store it as an opaque string and send it back unchanged.
+
+## Example
+
+```json
+{"error":{"code":"invalid_run_id","message":"the run id is not a valid run identifier","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Reading a run back by the id you stored:
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/runs/run_a4314b6cc08f4bd8814099a613abeb44 \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```typescript TypeScript
+const runId = "run_a4314b6cc08f4bd8814099a613abeb44"; // exactly as the API returned it
+
+const res = await fetch(`https://api.opentype.dev/v1/runs/${encodeURIComponent(runId)}`, {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+console.log(body.state);
+```
+
+```python Python
+import os
+import requests
+
+run_id = "run_a4314b6cc08f4bd8814099a613abeb44"  # exactly as the API returned it
+
+resp = requests.get(
+    f"https://api.opentype.dev/v1/runs/{run_id}",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+print(body["state"])
+```
+</CodeGroup>
+
+## Related
+
+- [Polling](/guides/polling) - recover a run by id after a client timeout.
+- [Conventions](/reference/conventions) - id formats, including the two run id spellings.
+- [run_not_found](/problems/run_not_found) - the id is well formed but not in your organization.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

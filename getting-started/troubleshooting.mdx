@@ -1,0 +1,489 @@
+---
+title: "Troubleshooting"
+description: "Symptom, cause and fix for the OpenType API errors you are most likely to meet, with the request id to log for each one."
+icon: "life-ring"
+keywords: ["troubleshooting", "errors", "invalid_credential", "insufficient_credits", "quota", "idempotency", "x-request-id", "503", "202"]
+---
+
+This page is for developers whose call to the OpenType API returned something they did not expect. Each entry starts from what you see, an HTTP status and an error `code`, then gives the cause and the fix, and links to the full page for that code under [Problem codes](/problems). It covers the failures people hit first: rejected keys, credit and quota refusals, runs that cannot be routed, and retries that do not behave the way you assumed.
+
+## Log the request id first
+
+Every response carries an `x-request-id` header, successful ones included. On a JSON error the same value is in `error.request_id`. It is the one value that identifies a single request, so log it with the status and the `code` on every failure, before you change anything.
+
+- You can send your own `x-request-id`. The server keeps it when it matches `^[A-Za-z0-9._-]{1,128}$`, and otherwise mints `req_` followed by 32 hex characters.
+- A few routes can answer with a plain-text body instead of JSON (see [Request format](#request-format)). Those bodies carry no `request_id`, so read the header.
+- Branch on `error.code`. The `message` is written for people, and its wording is not something to match on.
+
+This request sets its own id and prints the four values worth logging when it fails:
+
+<CodeGroup>
+
+```bash cURL
+curl -sS -i https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "x-request-id: debug-$(uuidgen)" \
+  -d '{
+    "kind": "decision",
+    "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+    "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+    "max_output_tokens": 16
+  }'
+# -i prints the response headers, including x-request-id
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": crypto.randomUUID(),
+    "x-request-id": `debug-${crypto.randomUUID()}`,
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    state: { ticket: "I was charged twice this month and nobody answers my emails.", plan: "pro" },
+    questions: { urgent: { type: "noul", instructions: "reply within the hour?" } },
+    max_output_tokens: 16,
+  }),
+});
+
+const text = await res.text();
+let body: any = null;
+try {
+  body = JSON.parse(text);
+} catch {
+  // plain-text rejection from the web framework: no JSON envelope
+}
+
+if (!res.ok) {
+  console.error(JSON.stringify({
+    status: res.status,
+    code: body?.error?.code ?? null,
+    request_id: body?.error?.request_id ?? res.headers.get("x-request-id"),
+    message: body?.error?.message ?? text,
+  }));
+} else {
+  console.log(res.headers.get("x-request-id"), body.run_id, body.state);
+}
+```
+
+```python Python
+import json, os, uuid
+import requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": str(uuid.uuid4()),
+        "x-request-id": f"debug-{uuid.uuid4()}",
+    },
+    json={
+        "kind": "decision",
+        "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+        "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+        "max_output_tokens": 16,
+    },
+    timeout=130,  # above the longest server-side deadline of 120 s
+)
+
+if not res.ok:
+    try:
+        err = res.json().get("error", {})
+    except ValueError:  # plain-text rejection from the web framework
+        err = {"message": res.text}
+    print(json.dumps({
+        "status": res.status_code,
+        "code": err.get("code"),
+        "request_id": err.get("request_id") or res.headers.get("x-request-id"),
+        "message": err.get("message"),
+    }))
+else:
+    run = res.json()
+    print(res.headers["x-request-id"], run["run_id"], run["state"])
+```
+
+</CodeGroup>
+
+When you send your own id, the error body echoes it:
+
+```json
+{"error":{"code":"insufficient_credits","message":"the organization's credit balance does not cover this run","request_id":"debug-3f1c9a2e-5b7d-4e8a-9c0f-1a2b3c4d5e6f"}}
+```
+
+## Keys and authentication
+
+<AccordionGroup>
+  <Accordion title="401 invalid_credential: the key is rejected">
+  **What you see**
+
+  ```json
+  {"error":{"code":"invalid_credential","message":"the credential was rejected","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+  ```
+
+  **Why.** The `Authorization` header carried something that is not an active API key. Any of these gives the same code:
+
+  - The value is not `otsk_` followed by exactly 64 lowercase hex characters, 69 characters in all. A truncated copy fails here, and so does the 13-character `secret_prefix` that key lists show.
+  - The key does not exist.
+  - The key was revoked. A revoked key gets `invalid_credential`, not `key_revoked`: that code only comes back when you try to rotate a revoked key.
+  - The key was rotated. The old secret stops working immediately, with no grace period.
+  - You sent the key id. A `key_...` id names a key in URLs; it is not a credential.
+
+  **Fix.** Check the length first: `printf %s "$OPENTYPE_API_KEY" | wc -c` should print `69`. Then compare its first 13 characters with the prefixes and states on the **API keys** page of the console, or in `GET /v1/keys` called with a key that holds `keys_read`. A revoked key cannot be re-enabled and a lost secret cannot be recovered, so create a new key. Retrying with the same value never succeeds.
+
+  <Frame>
+    <img src="/images/product/api-keys-populated.png" alt="API keys page listing four keys with their prefixes, scopes, last-used times and active or revoked state" />
+  </Frame>
+
+  **Log** the status, the code and the `x-request-id`, never the secret. See [`invalid_credential`](/problems/invalid_credential).
+  </Accordion>
+
+  <Accordion title="401 missing_credentials: no key reached the server">
+  **What you see:** `{"error":{"code":"missing_credentials","message":"a bearer credential is required",...}}`
+
+  **Why.** The request had no `Authorization` header, used a scheme other than `Bearer`, or sent an empty token. A common cause is an environment variable that is not set in the process that makes the call, such as a CI job or a container, so the header goes out as `Bearer ` with nothing after it.
+
+  **Fix.** Send `Authorization: Bearer <key>`. The scheme name is case-insensitive. There is no other auth header and no cookie authentication. Print `${#OPENTYPE_API_KEY}` in the failing environment to confirm the variable is set.
+
+  **Log** the status, the code and the `x-request-id`. See [`missing_credentials`](/problems/missing_credentials).
+  </Accordion>
+
+  <Accordion title="400 secret_in_path: a key secret went into a URL">
+  **What you see**
+
+  ```json
+  {"error":{"code":"secret_in_path","message":"that value looks like a key secret, not a key id; rotate it and pass the key_ id","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+  ```
+
+  **Why.** You called `GET /v1/keys/{key_id}`, `DELETE /v1/keys/{key_id}` or `POST /v1/keys/{key_id}/rotate` with a value starting `otsk_` in the path. The server refused it, but the secret has already travelled in a URL, and URLs end up in shell history, proxy logs and access logs.
+
+  **Fix.** Treat the secret as leaked and **rotate it now**. Find its `key_` id by matching the first 13 characters of the secret against `secret_prefix` in `GET /v1/keys`, then rotate with a key that holds `keys_write`. Rotation is only available through the API:
+
+  <CodeGroup>
+
+  ```bash cURL
+  curl -sS -X POST https://api.opentype.dev/v1/keys/key_d92a9043204d41c09c78fc813d54ef06/rotate \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY"
+  ```
+
+  ```ts TypeScript
+  const res = await fetch(
+    "https://api.opentype.dev/v1/keys/key_d92a9043204d41c09c78fc813d54ef06/rotate",
+    { method: "POST", headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` } },
+  );
+  const key = await res.json();
+  // key.secret is shown once: store it in your secret manager now
+  ```
+
+  ```python Python
+  import os, requests
+
+  res = requests.post(
+      "https://api.opentype.dev/v1/keys/key_d92a9043204d41c09c78fc813d54ef06/rotate",
+      headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+      timeout=30,
+  )
+  key = res.json()  # key["secret"] is shown once: store it now
+  ```
+
+  </CodeGroup>
+
+  The `200` response keeps the same `id`, name and scopes and carries the new `secret`, once. The old secret stops working at that moment, so update every place that uses it. Rotating a revoked key answers `409 key_revoked`; create a new key instead.
+
+  **Log** the `x-request-id` of the refused call and of the rotation, not the secret. See [`secret_in_path`](/problems/secret_in_path) and [Key rotation](/guides/key-rotation).
+  </Accordion>
+
+  <Accordion title="403 scope_denied: the key lacks a scope">
+  **What you see:** `{"error":{"code":"scope_denied","message":"the session lacks the runs_write scope",...}}`. The message names the missing scope.
+
+  **Why.** Every route requires one scope, and the credential does not hold it. `POST /v1/runs` needs `runs_write`; reading or streaming a run needs `runs_read`; usage and quota need `usage_read`; `GET /v1/billing` needs `billing_read`.
+
+  **Fix.** A key's scopes are fixed when it is created and cannot be edited, so create a new key that holds the scope, then revoke the old one if you no longer need it. You can only give a key scopes that you hold yourself. In the console, the **Send requests** set gives `runs_write` and `runs_read`.
+
+  **Log** the status, the code, the scope named in the message and the `x-request-id`. See [`scope_denied`](/problems/scope_denied) and [Scopes](/reference/scopes).
+  </Accordion>
+</AccordionGroup>
+
+## Credit and quota
+
+<AccordionGroup>
+  <Accordion title="402 insufficient_credits: the balance does not cover the hold">
+  **What you see**
+
+  ```json
+  {"error":{"code":"insufficient_credits","message":"the organization's credit balance does not cover this run","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+  ```
+
+  **Why.** Before a run starts, it holds its whole per-request spend ceiling, 5,000 micro-USD ($0.005), even though a typical decision run costs a few dozen micro-USD. If your available credit minus that hold would drop below zero, the run is refused. Available credit is `balance_micros`: credited, minus spent, minus the holds of runs still in flight, so many runs in parallel need more headroom than one.
+
+  Nothing is stored: the run and its hold are rolled back. If auto-recharge is on, an attempt is also queued in the background.
+
+  **Fix.**
+
+  1. Check the balance on the **Billing** page of the console, or with `GET /v1/billing` and a key that holds `billing_read`:
+
+     ```bash
+     curl -sS https://api.opentype.dev/v1/billing \
+       -H "Authorization: Bearer $OPENTYPE_API_KEY" | jq '{balance_micros, auto_recharge, has_payment_method}'
+     ```
+
+  2. Add funds from the console or with `POST /v1/billing/checkout`, between $5 and $1,000 in whole cents. You finish the payment on a Stripe-hosted checkout page, and the credit arrives once the payment succeeds, not in the checkout response.
+  3. Retry with the **same** `Idempotency-Key`. The refused request never used it.
+  4. Turn on [auto-recharge](/guides/auto-recharge) so a low balance tops itself up. It charges at most once per organization per clock hour.
+
+  **Log** the status, the code and the `x-request-id`, and alert on this code rather than retrying in a loop. See [`insufficient_credits`](/problems/insufficient_credits) and [Handling insufficient credits](/guides/handling-insufficient-credits).
+  </Accordion>
+
+  <Accordion title="429 organization_spend_quota_exhausted or organization_token_quota_exhausted">
+  **What you see**
+
+  ```json
+  {"error":{"code":"organization_spend_quota_exhausted","message":"the estimated provider spend of 5000 micro-USD exceeds the 1200 micro-USD remaining in this quota period","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+  {"error":{"code":"organization_token_quota_exhausted","message":"the estimated 9000 tokens exceed the 4000 tokens remaining in this quota period","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+  ```
+
+  **Why.** This is a quota refusal, not a rate limit: OpenType has no rate limiter, and `POST /v1/runs` is the only route that answers `429`. Your organization has a spend limit, a token limit, or both, for the current period, which is the current UTC calendar month.
+
+  - **Spend:** the check compares the run's per-request ceiling, at most 5,000 micro-USD, with what is left of the period's spend limit. It does not use the run's actual cost, so refusals begin once less than 5,000 micro-USD remain, even though a typical run costs far less.
+  - **Tokens:** the estimated input tokens plus `max_output_tokens` exceed the tokens left in the period.
+
+  **Fix.** Read the limits and what remains with `GET /v1/quota` (scope `usage_read`):
+
+  <CodeGroup>
+
+  ```bash cURL
+  curl -sS https://api.opentype.dev/v1/quota \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    | jq '{period, limits, remaining_spend_micros, remaining_tokens}'
+  ```
+
+  ```ts TypeScript
+  const quota = await fetch("https://api.opentype.dev/v1/quota", {
+    headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+  }).then((r) => r.json());
+  console.log(quota.period, quota.limits, quota.remaining_spend_micros, quota.remaining_tokens);
+  ```
+
+  ```python Python
+  import os, requests
+
+  quota = requests.get(
+      "https://api.opentype.dev/v1/quota",
+      headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+      timeout=30,
+  ).json()
+  print(quota["period"], quota["limits"], quota["remaining_spend_micros"], quota["remaining_tokens"])
+  ```
+
+  </CodeGroup>
+
+  A `null` limit means there is none. For the token code, lower `max_output_tokens` or trim the input. For the spend code, the remaining spend also counts the holds of runs still in flight, so it recovers a little as those runs settle; otherwise it resets when the next period begins at 00:00:00Z on the first of the next month. Back off instead of retrying in a loop. The refused request never used its `Idempotency-Key`, so you can reuse it.
+
+  **Log** the status, the code, the numbers in the message and the `x-request-id`. See [`organization_spend_quota_exhausted`](/problems/organization_spend_quota_exhausted), [`organization_token_quota_exhausted`](/problems/organization_token_quota_exhausted) and [Spend limits and quotas](/guides/spend-limits-and-quotas).
+  </Accordion>
+</AccordionGroup>
+
+## Runs that are accepted, then fail
+
+These errors come back after the run was admitted, so its `Idempotency-Key` is now tied to a run that stays `pending`. Retry them with a **new** key; see [a same-key retry stuck at 202](#retries-and-idempotency).
+
+<AccordionGroup>
+  <Accordion title="503 no_route_available on a verdict run">
+  **What you see:** `{"error":{"code":"no_route_available","message":"no eligible route is available for this request",...}}` on a request without `"kind": "decision"`.
+
+  **Why.** Neon 1.1 serves decision runs only. A verdict run, which is also what you get when `kind` is absent, has no model to route to, so it fails every time. Retrying does not help.
+
+  **Fix.** Ask the same thing as a decision run. A verdict schema with an `enum` usually maps to one `choice` question:
+
+  ```json
+  {
+    "kind": "decision",
+    "state": "Order 1182 arrived cracked. I want my money back.",
+    "questions": {
+      "intent": {"type": "choice", "instructions": "What does the customer want?",
+                 "criteria": {"refund": "money back", "exchange": "a replacement item", "question": null}}
+    },
+    "max_output_tokens": 16
+  }
+  ```
+
+  Send it with a new `Idempotency-Key`. The answer's `choice` is the most likely intent, and `probabilities` gives every option.
+
+  **Log** the status, the code and the `x-request-id`. See [`no_route_available`](/problems/no_route_available) and [Verdict runs](/guides/verdict-runs).
+  </Accordion>
+
+  <Accordion title="503 decision_unavailable: labels must be single tokens">
+  **What you see:** `{"error":{"code":"decision_unavailable","message":"no decision-capable route is available for this request",...}}` on a decision run that passed validation.
+
+  **Why.** The model answers each question by putting probability on its labels, and every label must be a single token. Admission checks the count and uniqueness of alternatives but not their length, so a long label is caught only when the run is routed. The same code is returned when the question set does not fit the answer template, or when the request is rejected upstream.
+
+  **Fix.** Make every option name and level name a short, common single word, and move the explanation into the description or the instructions:
+
+  ```json
+  {
+    "bucket": {"type": "choice", "instructions": "Which queue owns this ticket?",
+               "criteria": {"billing": "billing and payments: charges, refunds, invoices",
+                            "technical": "bugs, errors and outages",
+                            "other": null}},
+    "tone":   {"type": "score", "instructions": "How annoyed is the customer?",
+               "criteria": ["calm", "annoyed", "furious"]}
+  }
+  ```
+
+  Multi-word names such as `"billing and payments"` or `"extremely furious"` fail this way. Send the corrected run with a new `Idempotency-Key`. If short labels still fail, keep the `x-request-id`.
+
+  **Log** the status, the code, the question ids and labels you sent, and the `x-request-id`. See [`decision_unavailable`](/problems/decision_unavailable) and [Decision questions](/getting-started/decision-questions).
+  </Accordion>
+
+  <Accordion title="413 input_too_large: the input is over 3,968 tokens">
+  **What you see:** `413` with code `input_too_large`.
+
+  **Why.** Every run gets an input estimate: `ceil(prompt bytes / 4) + ceil(contract bytes / 4)`. For a decision run the prompt is the `state`, a string as-is or anything else as its JSON text, and the contract is `instructions`, `questions`, `draws` and `think_tokens`. There are two ceilings:
+
+  | Ceiling | Value | When it is checked |
+  | --- | --- | --- |
+  | Neon 1.1 context | 3,968 tokens, about 15,800 bytes of state plus contract | when the run is routed, after admission |
+  | Every run | 64,000 tokens: `"the input estimate of N tokens exceeds the ceiling"` | before the run is admitted |
+
+  In practice the 3,968-token context is the one decision runs hit.
+
+  **Fix.** Send only the fields of `state` that your questions need, shorten `instructions` and descriptions, and split a large question set across several runs. Send the smaller request with a new `Idempotency-Key`: the body has changed, and after a context refusal the old key is already tied to a pending run. The request body itself is capped separately at 1 MiB, which gives `413 body_too_large`.
+
+  **Log** the status, the code, the size of the `state` you sent and the `x-request-id`. See [`input_too_large`](/problems/input_too_large) and [Limits](/reference/limits).
+  </Accordion>
+
+  <Accordion title="504 deadline_exceeded: the run ran out of time">
+  **What you see:** `504` with code `deadline_exceeded`. The message may say "before a route was chosen" even when the model call was the slow part, so rely on the code.
+
+  **Why.** Each run has a deadline, `deadline_ms`: 30,000 by default, clamped to 1 to 120,000. The deadline passed during routing or during the model call.
+
+  **Fix.** Raise `deadline_ms`, up to 120,000, or shrink the input, then retry with backoff and a new `Idempotency-Key`. Set your HTTP client's timeout above `deadline_ms` so you receive the `504` instead of cutting the connection yourself.
+
+  **Log** the status, the code, the `deadline_ms` you sent and the `x-request-id`. See [`deadline_exceeded`](/problems/deadline_exceeded).
+  </Accordion>
+</AccordionGroup>
+
+## Retries and idempotency
+
+<AccordionGroup>
+  <Accordion title="A same-key retry keeps returning 202 with state pending">
+  **What you see:** you resend `POST /v1/runs` with the same `Idempotency-Key` and body, and every attempt answers `202`:
+
+  ```json
+  {
+    "run_id": "run_a4314b6cc08f4bd8814099a613abeb44",
+    "kind": "decision",
+    "state": "pending",
+    "input_digest": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+    "replayed": true
+  }
+  ```
+
+  **Why.** `POST /v1/runs` is synchronous: a fresh run returns `200` once it has settled. A `202` is a replay of a stored run that is not finished. When a run fails before any model served it (`no_route_available`, `decision_unavailable`, a context `input_too_large`, `deadline_exceeded`, `budget_exhausted`, or a first-attempt provider failure), its hold is released but its state is never moved: it stays `pending` for good, and so does every replay of that key.
+
+  **Fix.** Send the request again with a **new** `Idempotency-Key`. Do not poll the pending run: it will not complete. A replay is never charged, so the `202`s cost nothing.
+
+  If you retried while the first request might still have been in flight, wait until its deadline has passed (at most 120 s) and replay once more. A `200` then carries the answer with `"replayed": true` and is not charged again; a run still `pending` after its deadline is stuck.
+
+  **Log** the `Idempotency-Key`, the `run_id` from the `202` body and the `x-request-id` of every attempt. See [Polling](/guides/polling) and [Idempotency](/guides/idempotency).
+  </Accordion>
+
+  <Accordion title="409 idempotency_conflict: the key was used with another body">
+  **What you see**
+
+  ```json
+  {"error":{"code":"idempotency_conflict","message":"this idempotency key was already used with a different body","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+  ```
+
+  **Why.** Your organization already used this key with a different request. A key's identity is the normalized input (the decision `state`, or `system` and `messages`), the `kind`, and the contract (`instructions`, `questions`, `draws` and `think_tokens`, or the verdict `schema`). Keys never expire, so a key reused months later still conflicts.
+
+  `max_output_tokens`, `deadline_ms` and `capability_hint` are not part of the identity. Changing only those and reusing the key does not conflict: it returns the stored run, not a new one.
+
+  **Fix.** If this is a retry, resend the original body unchanged. If it is a new request, use a new key. Keys derived from your own business ids work well, with a version when the question changes: `ticket-4822-triage-v2`. The refused request created nothing and was not charged.
+
+  **Log** the `Idempotency-Key`, the code and the `x-request-id`. See [`idempotency_conflict`](/problems/idempotency_conflict) and [Idempotency](/guides/idempotency).
+  </Accordion>
+</AccordionGroup>
+
+## Request format
+
+<AccordionGroup>
+  <Accordion title="Plain-text 400, 413, 415 or 422 on keys, usage or billing routes">
+  **What you see:** a `text/plain` body instead of the JSON envelope, for example `422` with `Failed to deserialize the JSON body into the target type: ...`.
+
+  **Why.** The keys, usage, quota and billing routes read JSON, query and path values with the web framework's own extractors, which answer in plain text. Every request body refuses fields it does not define:
+
+  | Status | Body begins with | Cause |
+  | --- | --- | --- |
+  | 400 | `Failed to parse the request body as JSON` | Malformed JSON |
+  | 415 | ``Expected request with `Content-Type: application/json` `` | Missing or wrong `Content-Type` |
+  | 422 | `Failed to deserialize the JSON body into the target type` | A wrong type, a missing field, or an **unknown field** |
+  | 400 | `Failed to deserialize query string` | An unknown or malformed query parameter on `/v1/usage` routes |
+  | 413 | `Failed to buffer the request body` | A body over 1 MiB |
+  | 404, 405 | empty | Unknown path, or the wrong method on a known path |
+
+  For example, keys never expire, so an expiry field is refused:
+
+  ```bash
+  curl -sS -i -X POST https://api.opentype.dev/v1/keys \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"name": "ci-pipeline", "scopes": ["runs_write", "runs_read"], "expires_at": "2027-01-01T00:00:00Z"}'
+  # HTTP/1.1 422 ... Failed to deserialize the JSON body into the target type: ...
+  ```
+
+  **Fix.** Send `Content-Type: application/json`, valid JSON, and only the documented fields with the documented types. Branch on the HTTP status when the body is not JSON. On `POST /v1/runs` the same mistakes come back as JSON `400 invalid_body` instead.
+
+  **Log** the status, the first line of the body and the `x-request-id` header: these bodies carry no `request_id`. See [Errors](/reference/errors).
+  </Accordion>
+
+  <Accordion title="400 invalid_body on POST /v1/runs">
+  **What you see:** `{"error":{"code":"invalid_body","message":"the request body is not valid: state is only valid on a decision run",...}}`. Every message starts with `the request body is not valid: `.
+
+  **Why.** The body does not fit the contract. The most common causes:
+
+  - `"kind": "decision"` is missing. `kind` defaults to `verdict`, so the body is checked as a verdict run and a decision-only field such as `state` is refused.
+  - A field the run does not define, or a value of the wrong type: `the body does not match the schema`.
+  - `max_output_tokens` is `0`: `max_output_tokens must be greater than zero`.
+  - No `Content-Type: application/json` header, or malformed JSON.
+
+  **Fix.** Correct the body and send it again. Nothing was stored, so the same `Idempotency-Key` is fine.
+
+  **Log** the status, the full message and the `x-request-id`. See [`invalid_body`](/problems/invalid_body).
+  </Accordion>
+
+  <Accordion title="400 unknown_model: the model id is not recognised">
+  **Why.** The optional `model` field on a decision run accepts `neon-1.1` or `neon-latest`. Any other value is refused.
+
+  **Fix.** Send one of those two ids, or leave `model` out. Live decision responses report `decision.model` as `neon-1.1`.
+
+  **Log** the status, the code and the `x-request-id`. See [`unknown_model`](/problems/unknown_model) and [Models and pricing](/getting-started/models-and-pricing).
+  </Accordion>
+</AccordionGroup>
+
+## When to retry
+
+Responses carry no retry hint, in the body or in the headers. Decide from the status and the code:
+
+| Status | Retry? | `Idempotency-Key` to use |
+| --- | --- | --- |
+| `400`, `401`, `403`, `404` | No. Fix the request or the credential first. | The same key, with the corrected body |
+| `402` | After you add credit | The same key |
+| `409` | Only with the original body | The same key with the original body, or a new key |
+| `413` | After you shrink the input | A new key |
+| `429` | After the period resets, or with a smaller `max_output_tokens` | The same key |
+| `500`, `503`, `504` | Yes, with backoff | A new key |
+| No response (client timeout) | Replay to learn the outcome | The same key and body |
+
+## Related
+
+- [Problem codes](/problems) - every code, its status and the fix, one page each.
+- [Errors](/reference/errors) - the error envelope, plain-text rejections and how to branch on `code`.
+- [Runs](/getting-started/runs) - run states, replays, and what a stored run returns.
+- [Error handling](/guides/error-handling) - a retry helper that picks the right idempotency key for you.
+- [Frequently asked questions](/getting-started/faq) - short answers on cost, limits, keys and timeouts.

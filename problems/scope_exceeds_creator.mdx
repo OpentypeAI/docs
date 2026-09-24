@@ -1,0 +1,105 @@
+---
+title: "scope_exceeds_creator"
+description: "HTTP 403 on POST /v1/keys: the new key asked for a scope the caller does not hold. Why keys cannot exceed their creator, and how to fix it."
+icon: "shield-halved"
+keywords: ["scope_exceeds_creator", "403", "POST /v1/keys", "scopes", "create key", "roles"]
+---
+
+`scope_exceeds_creator` means you tried to create an API key with a scope you do not hold yourself. Read this page if key creation fails with a 403 that names a scope.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `403` | `scope_exceeds_creator` | No. Request only scopes you hold. |
+
+## What happened
+
+Route: `POST /v1/keys`.
+
+A key can never do more than the account that created it. OpenType checks every scope in `scopes` against the scopes of the caller: your role when you use the console, or the calling key's own scopes when you create keys with a key. At least one requested scope is missing, and the message names it. No key was created.
+
+| Role | Scopes it can put on a key |
+| --- | --- |
+| `owner`, `admin` | all nine |
+| `member` | `runs_read`, `runs_write`, `keys_read`, `keys_write`, `members_read`, `usage_read`, `billing_read` |
+| `billing` | `usage_read`, `billing_read`, `billing_write`, `members_read` |
+| `viewer` | `runs_read`, `usage_read`, `billing_read`, `keys_read` |
+
+A `member`, for example, cannot create a key with `billing_write` or `members_write`.
+
+## How to fix
+
+- Remove the named scope from `scopes`, if the key does not need it.
+- If the key does need it, ask an owner or admin to create the key.
+- If you create keys with a provisioning key, that key's own scopes are the ceiling. Create the provisioning key with the scopes you intend to hand out, and `keys_write`.
+
+## Example
+
+```json
+{"error":{"code":"scope_exceeds_creator","message":"the creating account does not hold the scope billing_write","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+List your keys and match your own key's `secret_prefix` to see which scopes it holds, then handle the refusal when you create a key. Listing keys needs `keys_read`; creating one needs `keys_write`.
+
+<CodeGroup>
+```bash curl
+# Your own key's scopes: match its first 13 characters against secret_prefix.
+curl -s https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  | jq --arg p "${OPENTYPE_API_KEY:0:13}" '.keys[] | select(.secret_prefix == $p) | .scopes'
+
+curl https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ops-dashboard", "scopes": ["runs_write", "runs_read", "billing_write"]}'
+```
+
+```typescript TypeScript
+const requested = ["runs_write", "runs_read", "billing_write"];
+
+const res = await fetch("https://api.opentype.dev/v1/keys", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ name: "ops-dashboard", scopes: requested }),
+});
+
+const body = await res.json();
+if (res.status === 403 && body.error.code === "scope_exceeds_creator") {
+  // The message names the scope you do not hold, e.g. "... the scope billing_write".
+  throw new Error(`Drop the scope or ask an admin: ${body.error.message}`);
+}
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+console.log(body.id);
+```
+
+```python Python
+import os
+import requests
+
+requested = ["runs_write", "runs_read", "billing_write"]
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/keys",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}", "Content-Type": "application/json"},
+    json={"name": "ops-dashboard", "scopes": requested},
+    timeout=30,
+)
+
+body = resp.json()
+if resp.status_code == 403 and body["error"]["code"] == "scope_exceeds_creator":
+    # The message names the scope you do not hold, e.g. "... the scope billing_write".
+    raise RuntimeError(f"Drop the scope or ask an admin: {body['error']['message']}")
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+print(body["id"])
+```
+</CodeGroup>
+
+## Related
+
+- [Scopes and roles](/security/scopes-and-roles) - which role holds which scope.
+- [Scopes](/reference/scopes) - every scope and the routes it unlocks.
+- [API keys in the console](/console/api-keys) - create a key from a preset scope set.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

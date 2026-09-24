@@ -1,0 +1,120 @@
+---
+title: "empty_scopes"
+description: "HTTP 400 on POST /v1/keys: the new key requested no scopes. The nine scopes, common scope sets, and how to create a working key."
+icon: "key"
+keywords: ["empty_scopes", "400", "POST /v1/keys", "scopes", "API key", "create key"]
+---
+
+`empty_scopes` means a request to create an API key sent an empty `scopes` list. Read this page if you create keys from code or a provisioning script.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `400` | `empty_scopes` | No. Request at least one scope. |
+
+## What happened
+
+Route: `POST /v1/keys`.
+
+The body had `"scopes": []`. OpenType does not create a key without scopes. No key was created.
+
+## How to fix
+
+Request the scopes the key needs, and no more. Every scope you request must also be held by you, or the call fails with [`scope_exceeds_creator`](/problems/scope_exceeds_creator).
+
+| Scope | Lets the key call |
+| --- | --- |
+| `runs_read` | `GET /v1/runs`, `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream` |
+| `runs_write` | `POST /v1/runs`, which spends credit |
+| `keys_read` | `GET /v1/keys`, `GET /v1/keys/{key_id}` |
+| `keys_write` | `POST /v1/keys`, `DELETE /v1/keys/{key_id}`, `POST /v1/keys/{key_id}/rotate` |
+| `members_read` | no documented route requires it on its own |
+| `members_write` | creating a key that acts as a service account, together with `keys_write` |
+| `billing_read` | `GET /v1/billing` |
+| `billing_write` | `POST /v1/billing/checkout`, `POST /v1/billing/portal`, `PUT /v1/billing/auto-recharge` |
+| `usage_read` | `GET /v1/usage`, `/v1/usage/ledger`, `/v1/usage/daily`, `/v1/usage/runs/{run_id}`, `GET /v1/quota` |
+
+Common sets:
+
+| Use | Scopes |
+| --- | --- |
+| A service that sends runs | `runs_write`, `runs_read` |
+| A dashboard that reads spend | `usage_read`, `billing_read`, `runs_read` |
+| A provisioning script | `keys_read`, `keys_write` |
+
+Duplicates are removed and the list is sorted in the response. A key's scopes are fixed when it is created; to change them, create a new key.
+
+## Example
+
+```json
+{"error":{"code":"empty_scopes","message":"a key must request at least one scope","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Creating a key that can send and read runs. The call needs `keys_write`. The `secret` in the response is shown once: store it now.
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ci-pipeline", "scopes": ["runs_write", "runs_read"]}'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/keys", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ name: "ci-pipeline", scopes: ["runs_write", "runs_read"] }),
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+// body.secret is returned only here. Put it in your secret store now.
+console.log(body.id, body.scopes);
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/keys",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}", "Content-Type": "application/json"},
+    json={"name": "ci-pipeline", "scopes": ["runs_write", "runs_read"]},
+    timeout=30,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+# body["secret"] is returned only here. Put it in your secret store now.
+print(body["id"], body["scopes"])
+```
+</CodeGroup>
+
+Response, `201`:
+
+```json
+{
+  "id": "key_d92a9043204d41c09c78fc813d54ef06",
+  "name": "ci-pipeline",
+  "principal": {"type": "user", "id": "user_example"},
+  "scopes": ["runs_read", "runs_write"],
+  "state": "active",
+  "secret_prefix": "otsk_fde66231",
+  "created_by": "user_example",
+  "created_at": "2026-09-24T10:12:03Z",
+  "last_used_at": null,
+  "revoked_at": null,
+  "secret": "otsk_..."
+}
+```
+
+## Related
+
+- [Scopes](/reference/scopes) - every scope and the routes it unlocks.
+- [API keys in the console](/console/api-keys) - create a key with a preset scope set.
+- [scope_exceeds_creator](/problems/scope_exceeds_creator) - you asked for a scope you do not hold.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

@@ -1,0 +1,109 @@
+---
+title: "organization_token_quota_exhausted"
+description: "HTTP 429 on POST /v1/runs: the run's estimated tokens exceed the tokens left in this quota period. How the estimate works and what to do."
+icon: "gauge-high"
+keywords: ["organization_token_quota_exhausted", "429", "token quota", "period token limit", "max_output_tokens", "GET /v1/quota", "POST /v1/runs"]
+---
+
+`organization_token_quota_exhausted` means your organization's token limit for the current period has too few tokens left for this run. Read this page when runs fail with a 429 and the code names tokens.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `429` | `organization_token_quota_exhausted` | Yes, once the request is smaller or the period has room. Keep the same `Idempotency-Key`. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+An organization can have a token limit per quota period. The period is the current UTC calendar month. Before each run, OpenType estimates the tokens the run could use and compares that with the tokens left:
+
+```text
+run estimate     = input estimate + max_output_tokens
+input estimate   = ceil(prompt bytes / 4) + ceil(contract bytes / 4)
+tokens remaining = period token limit - tokens used this period
+```
+
+If the run estimate is larger than the tokens remaining, the run is refused. `max_output_tokens` counts in full, even when the answer turns out shorter.
+
+The run was refused before it existed. Nothing was stored and nothing was charged. A replay of an `Idempotency-Key` that already owns a run is never refused with 429.
+
+The message gives both numbers:
+
+```text
+the estimated <n> tokens exceed the <m> tokens remaining in this quota period
+```
+
+<Note>
+A 429 from OpenType always means a period quota refused the run. The response does not say when to retry, so choose your own backoff.
+</Note>
+
+## How to fix
+
+1. Read the quota with `GET /v1/quota` (needs `usage_read`). `remaining_tokens` is what is left in the period.
+2. Lower `max_output_tokens` to what the answer needs. A decision run usually needs very few output tokens; the example in the [quickstart](/getting-started/quickstart) uses 16.
+3. Shrink the input: trim the `state` or prompt, and shorten the questions or schema.
+4. If the period is used up, wait for the next period, which starts at 00:00:00Z on the first day of the next month.
+5. Retry with the same `Idempotency-Key`. The refused request never created a run, so the key is still free, even after you lower `max_output_tokens` or trim the input.
+
+## Example
+
+```json
+{"error":{"code":"organization_token_quota_exhausted","message":"the estimated 9000 tokens exceed the 4000 tokens remaining in this quota period","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Checking the tokens left before sending a run:
+
+<CodeGroup>
+```bash curl
+curl -s https://api.opentype.dev/v1/quota \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  | jq '{period, limit: .limits.period_token_limit, remaining: .remaining_tokens}'
+```
+
+```typescript TypeScript
+const inputEstimate = 420;   // ceil(prompt bytes / 4) + ceil(contract bytes / 4)
+const maxOutputTokens = 16;
+
+const res = await fetch("https://api.opentype.dev/v1/quota", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+const quota = await res.json();
+if (!res.ok) throw new Error(`${quota.error.code}: ${quota.error.message}`);
+
+const remaining = quota.remaining_tokens; // null means no token limit
+if (remaining !== null && inputEstimate + maxOutputTokens > remaining) {
+  console.warn(`token quota: ${remaining} left, this run needs ${inputEstimate + maxOutputTokens}; resets ${quota.period.end_at}`);
+}
+```
+
+```python Python
+import os
+import requests
+
+input_estimate = 420  # ceil(prompt bytes / 4) + ceil(contract bytes / 4)
+max_output_tokens = 16
+
+resp = requests.get(
+    "https://api.opentype.dev/v1/quota",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+quota = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{quota['error']['code']}: {quota['error']['message']}")
+
+remaining = quota["remaining_tokens"]  # None means no token limit
+if remaining is not None and input_estimate + max_output_tokens > remaining:
+    print(
+        f"token quota: {remaining} left, this run needs {input_estimate + max_output_tokens}; "
+        f"resets {quota['period']['end_at']}"
+    )
+```
+</CodeGroup>
+
+## Related
+
+- [Spend limits and quotas](/guides/spend-limits-and-quotas) - period limits and `GET /v1/quota`.
+- [organization_spend_quota_exhausted](/problems/organization_spend_quota_exhausted) - the spend side of the same period quota.
+- [input_too_large](/problems/input_too_large) - how the input estimate is computed and capped.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

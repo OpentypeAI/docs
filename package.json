@@ -1,8 +1,11 @@
 {
   "name": "opentype-docs",
   "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
   "scripts": {
-    "dev": "mint dev",
-    "check": "mint validate && mint broken-links --check-anchors"
+    "dev": "npm exec --yes --package=mint@4.2.930 -- mint dev",
+    "check": "node scripts/check-docs-site.mjs && node scripts/check-docs-content.mjs && npm exec --yes --package=mint@4.2.930 -- mint validate",
+    "test": "bash scripts/tests/check-docs-site.test.sh && bash scripts/tests/check-docs-content.test.sh"
   }
 }

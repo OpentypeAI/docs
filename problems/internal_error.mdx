@@ -1,0 +1,122 @@
+---
+title: "internal_error"
+description: "HTTP 500 on POST /v1/runs: the run reached a state the service does not expect. Retry once with a new Idempotency-Key and report the request_id."
+icon: "bug"
+keywords: ["internal_error", "500", "internal server error", "POST /v1/runs", "request_id", "bug report"]
+---
+
+`internal_error` means the service hit a state it treats as a bug while running your request. Read this page when a run fails with a 500 and you need to decide whether to retry and what to report.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `500` | `internal_error` | Yes, once, with a new `Idempotency-Key`. Report the `request_id` either way. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+The run was admitted, then reached an internal step that does not match the kind of run it is. This state is not expected to happen, and nothing in your request can cause it on purpose. The message is always "an unexpected internal failure occurred"; it never contains your input or model output.
+
+## How to fix
+
+1. Log the `request_id` from the error body (it matches the `x-request-id` response header).
+2. Retry once, after a short pause, with a **new** `Idempotency-Key`. The failed run may be stored as `pending`, and a replay with the old key would return `202` with that pending run instead of an answer.
+3. If the retry also returns `internal_error`, stop retrying and report both `request_id` values. Retrying in a loop does not help with this code.
+
+## Example
+
+```json
+{"error":{"code":"internal_error","message":"an unexpected internal failure occurred","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Log the request id, retry once with a new key, and surface the failure if it repeats (two attempts in total):
+
+<CodeGroup>
+```bash curl
+BODY='{"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}'
+
+for attempt in 1 2; do
+  # A new Idempotency-Key per attempt: the failed run stays pending under the old key.
+  RESP=$(curl -sS -w '\n%{http_code}' https://api.opentype.dev/v1/runs \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -H "Idempotency-Key: $(uuidgen)" \
+    -d "$BODY")
+  STATUS=$(printf '%s' "$RESP" | tail -n1)
+  printf '%s\n' "$RESP" | sed '$d'
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # 500, 503, 504: back off, then try again
+    *) break ;;                        # success or 4xx: stop
+  esac
+done
+```
+
+```typescript TypeScript
+const body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16};
+
+async function createRunWithRetry(payload: unknown, maxAttempts = 2) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch("https://api.opentype.dev/v1/runs", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "Content-Type": "application/json",
+        // A new key per attempt: the failed run stays pending under the old key.
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) return data;
+
+    const { code, message, request_id } = data.error;
+    console.error(`POST /v1/runs -> ${res.status} ${code}: ${message} (${request_id})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${request_id})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const run = await createRunWithRetry(body);
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}
+
+def create_run_with_retry(payload: dict, max_attempts: int = 2) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        resp = requests.post(
+            "https://api.opentype.dev/v1/runs",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                # A new key per attempt: the failed run stays pending under the old key.
+                "Idempotency-Key": str(uuid.uuid4()),
+            },
+            json=payload,
+            timeout=130,  # longer than the largest deadline_ms (120,000 ms)
+        )
+        data = resp.json()
+        if resp.ok:
+            return data
+
+        err = data["error"]
+        print(f"POST /v1/runs -> {resp.status_code} {err['code']}: {err['message']} ({err['request_id']})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{err['code']} ({err['request_id']})")
+        time.sleep(2 ** attempt)
+
+run = create_run_with_retry(body)
+```
+</CodeGroup>
+
+## Related
+
+- [Request ids](/reference/request-ids) - send your own `x-request-id` and quote it when you report a problem.
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Idempotency](/guides/idempotency) - when to reuse an `Idempotency-Key` and when to send a new one.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

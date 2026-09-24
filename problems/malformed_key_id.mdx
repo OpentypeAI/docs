@@ -1,0 +1,92 @@
+---
+title: "malformed_key_id"
+description: "HTTP 400 on the key routes: the path value does not start with key_. Where to find a key's id and how to call the route correctly."
+icon: "key"
+keywords: ["malformed_key_id", "400", "key id", "key_", "GET /v1/keys/{key_id}", "DELETE /v1/keys/{key_id}", "rotate"]
+---
+
+`malformed_key_id` means a key route received a path value that is not a key id. Read this page if you read, revoke or rotate keys by id.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `400` | `malformed_key_id` | No. Use the key's id. |
+
+## What happened
+
+Routes:
+
+- `GET /v1/keys/{key_id}`
+- `DELETE /v1/keys/{key_id}`
+- `POST /v1/keys/{key_id}/rotate`
+
+A key id is an opaque string that starts with `key_`, for example `key_d92a9043204d41c09c78fc813d54ef06`. The path value does not start with `key_`, so OpenType did not look anything up.
+
+Common causes:
+
+- The key's `name` or `secret_prefix` was used in place of its `id`.
+- The id lost its `key_` prefix while being stored.
+
+A value starting with `otsk_` is a key secret, and gets [`secret_in_path`](/problems/secret_in_path) instead. A well-formed id that does not exist in your organization gets [`key_not_found`](/problems/key_not_found).
+
+## How to fix
+
+Use the `id` field from a key object. It is returned when you create a key, and on every key in `GET /v1/keys`. Store it as an opaque string and send it back unchanged.
+
+## Example
+
+```json
+{"error":{"code":"malformed_key_id","message":"a key id is an opaque string prefixed key_","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Finding a key's id by name, then reading it. Both calls need `keys_read`.
+
+<CodeGroup>
+```bash curl
+KEY_ID=$(curl -s https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  | jq -r '.keys[] | select(.name == "ci-pipeline") | .id')
+
+curl "https://api.opentype.dev/v1/keys/$KEY_ID" \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```typescript TypeScript
+const headers = { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` };
+
+const list = await fetch("https://api.opentype.dev/v1/keys", { headers }).then((r) => r.json());
+const key = list.keys.find((k: { name: string }) => k.name === "ci-pipeline");
+if (!key) throw new Error("no key named ci-pipeline");
+
+// key.id starts with key_. Never put key.secret_prefix or a secret in the path.
+const res = await fetch(`https://api.opentype.dev/v1/keys/${key.id}`, { headers });
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+console.log(body.state, body.last_used_at);
+```
+
+```python Python
+import os
+import requests
+
+headers = {"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"}
+
+keys = requests.get("https://api.opentype.dev/v1/keys", headers=headers, timeout=30).json()["keys"]
+key = next((k for k in keys if k["name"] == "ci-pipeline"), None)
+if key is None:
+    raise RuntimeError("no key named ci-pipeline")
+
+# key["id"] starts with key_. Never put key["secret_prefix"] or a secret in the path.
+resp = requests.get(f"https://api.opentype.dev/v1/keys/{key['id']}", headers=headers, timeout=30)
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+print(body["state"], body["last_used_at"])
+```
+</CodeGroup>
+
+## Related
+
+- [API keys in the console](/console/api-keys) - see each key's id, prefix and state.
+- [secret_in_path](/problems/secret_in_path) - a key secret was sent in the path.
+- [key_not_found](/problems/key_not_found) - the id is well formed but unknown.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

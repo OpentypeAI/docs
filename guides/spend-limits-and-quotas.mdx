@@ -1,0 +1,233 @@
+---
+title: "Spend limits and quotas"
+description: "Read your organization's period spend and token limits with GET /v1/quota, and handle the two 429 quota refusals on POST /v1/runs."
+icon: "gauge-high"
+keywords: ["quota", "spend limit", "token limit", "429", "organization_spend_quota_exhausted", "organization_token_quota_exhausted", "per-request ceiling"]
+---
+
+Quotas cap how much your organization may spend, and how many tokens it may use, in one quota period. They are separate from credit: credit is what you have paid for, a quota is what you are allowed to use. This page is for anyone who needs to know why a run got `429`, how much room is left this period, and how to keep a pipeline inside its limits.
+
+## The three limits
+
+| Limit | Field in `GET /v1/quota` | Applies to | When it is `null` |
+| --- | --- | --- | --- |
+| Period spend limit | `limits.period_spend_limit_micros` | Everything the organization spends in the period | No spend limit |
+| Period token limit | `limits.period_token_limit` | Every token the organization uses in the period | No token limit |
+| Per-request ceiling | `limits.request_spend_ceiling_micros` | Each run on its own | Never null; at most 5,000 micros ($0.005) |
+
+- **The quota period is the current UTC calendar month**, from the first of the month at 00:00:00Z to the first of the next month at 00:00:00Z. Consumption starts again from zero when the next period begins.
+- **The per-request ceiling is what every run holds** while it is in flight. It is at most 5,000 micros and can be set lower, never higher.
+- Every amount is an integer in micro-USD: 1,000,000 micros is 1 US dollar.
+
+There is no request-rate limit. A `429` from OpenType is always one of the quota refusals on this page.
+
+## Read your quota
+
+`GET /v1/quota` takes no parameters and needs the `usage_read` scope.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/quota \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/quota", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+if (!res.ok) throw new Error(`quota read failed: ${res.status}`);
+const quota = await res.json();
+if (quota.remaining_spend_micros !== null) {
+  const runsLeft = Math.floor(quota.remaining_spend_micros / quota.limits.request_spend_ceiling_micros);
+  console.log(`room for about ${runsLeft} more runs this period`);
+}
+```
+
+```python Python
+import os
+import requests
+
+res = requests.get(
+    "https://api.opentype.dev/v1/quota",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+res.raise_for_status()
+quota = res.json()
+if quota["remaining_spend_micros"] is not None:
+    runs_left = quota["remaining_spend_micros"] // quota["limits"]["request_spend_ceiling_micros"]
+    print(f"room for about {runs_left} more runs this period")
+```
+
+</CodeGroup>
+
+```json
+{
+  "organization_id": "org_example",
+  "period": {"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
+  "limits": {
+    "period_spend_limit_micros": 50000000,
+    "period_token_limit": null,
+    "request_spend_ceiling_micros": 5000
+  },
+  "consumed_tokens": {"input_tokens": 488120, "output_tokens": 30211, "total_tokens": 518331},
+  "consumed_spend": {"reserved_micros": 45000, "settled_micros": 21826, "unsettled_micros": 23174},
+  "remaining_spend_micros": 49955000,
+  "remaining_tokens": null
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `period` | `{start_at, end_at}` of the current quota period |
+| `limits` | The three limits above |
+| `consumed_tokens` | `input_tokens`, `output_tokens` and `total_tokens` used this period |
+| `consumed_spend` | `reserved_micros`, `settled_micros` and `unsettled_micros` this period, with the same meaning as in [`GET /v1/usage`](/guides/usage-reporting#totals-for-a-window) |
+| `remaining_spend_micros` | `period_spend_limit_micros` minus the larger of settled and reserved spend, never below 0. `null` when there is no spend limit. |
+| `remaining_tokens` | `period_token_limit` minus `consumed_tokens.total_tokens`, never below 0. `null` when there is no token limit. |
+
+Spend counts against the limit as the **larger** of settled and reserved spend. Runs in flight hold their ceiling, so they count against the limit before they settle. That stops a burst of concurrent runs from overshooting it.
+
+## The two refusals
+
+`POST /v1/runs` checks quota after it validates the request and before it checks credit. A refusal is a `429` with one of two codes.
+
+### `organization_spend_quota_exhausted`
+
+The run's **per-request ceiling**, not its likely cost, is compared with `remaining_spend_micros`:
+
+```text
+request_spend_ceiling_micros > remaining_spend_micros   ->   429 organization_spend_quota_exhausted
+```
+
+```json
+{
+  "error": {
+    "code": "organization_spend_quota_exhausted",
+    "message": "the estimated provider spend of 5000 micro-USD exceeds the 1200 micro-USD remaining in this quota period",
+    "request_id": "req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"
+  }
+}
+```
+
+A run that would settle at 19 micros is still refused when fewer than 5,000 micros of the period's limit remain (with the default ceiling). In practice, once less than one ceiling of the limit is left, no further run is admitted that period.
+
+### `organization_token_quota_exhausted`
+
+The run's token estimate is compared with `remaining_tokens`:
+
+```text
+estimated input tokens + max_output_tokens > remaining_tokens   ->   429 organization_token_quota_exhausted
+```
+
+The input estimate is the request's prompt bytes divided by 4, rounded up, plus its question set (or schema) bytes divided by 4, rounded up. `max_output_tokens` counts in full, whether or not the model uses it.
+
+```json
+{
+  "error": {
+    "code": "organization_token_quota_exhausted",
+    "message": "the estimated 9000 tokens exceed the 4000 tokens remaining in this quota period",
+    "request_id": "req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"
+  }
+}
+```
+
+A lower `max_output_tokens` can get a run under the remaining token allowance. A decision run's answers are short, so set `max_output_tokens` close to what the answers need, not to a large default.
+
+### What a refusal leaves behind
+
+- **Nothing is created or charged.** The refusal happens before a run exists.
+- **The `Idempotency-Key` stays free.** Retry with the same key and the same body later.
+- **A replay is never refused.** If the key already owns a run, you get that run back without a quota check.
+- **Branch on the `code`.** It tells you which limit refused the run; the table below says what to do.
+
+## What to do
+
+| Code | Waiting helps? | What to do |
+| --- | --- | --- |
+| `organization_spend_quota_exhausted` | Yes, when runs in flight settle (their holds shrink to their real cost), or at the start of the next period | Pause sending. Compare `remaining_spend_micros` with `request_spend_ceiling_micros` in `GET /v1/quota` and resume when it is larger. |
+| `organization_token_quota_exhausted` | Yes, at the start of the next period | Lower `max_output_tokens` or shrink the input, or pause until `period.end_at` |
+
+Do not retry a `429` in a tight loop. Back off, or better, read `GET /v1/quota` and wait until there is room. See the retry policy in [Error handling](/guides/error-handling).
+
+<CodeGroup>
+
+```bash curl
+# How long until the period resets, and how much room is left now.
+curl -sS https://api.opentype.dev/v1/quota \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  | jq '{resets_at: .period.end_at, remaining_spend_micros, remaining_tokens,
+         ceiling: .limits.request_spend_ceiling_micros}'
+```
+
+```ts TypeScript
+const API = "https://api.opentype.dev";
+const headers = { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` };
+
+// Resolves when a run of `tokens` estimated tokens would pass both quota checks.
+async function waitForQuota(tokens: number, pollMs = 60_000) {
+  for (;;) {
+    const q = await (await fetch(`${API}/v1/quota`, { headers })).json();
+    const spendOk =
+      q.remaining_spend_micros === null ||
+      q.remaining_spend_micros >= q.limits.request_spend_ceiling_micros;
+    const tokensOk = q.remaining_tokens === null || q.remaining_tokens >= tokens;
+    if (spendOk && tokensOk) return;
+    const untilReset = Date.parse(q.period.end_at) - Date.now();
+    await new Promise((r) => setTimeout(r, Math.max(1_000, Math.min(pollMs, untilReset))));
+  }
+}
+```
+
+```python Python
+import os
+import time
+from datetime import datetime, timezone
+
+import requests
+
+API = "https://api.opentype.dev"
+HEADERS = {"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"}
+
+
+def wait_for_quota(tokens, poll_s=60):
+    """Return when a run of `tokens` estimated tokens would pass both quota checks."""
+    while True:
+        q = requests.get(f"{API}/v1/quota", headers=HEADERS, timeout=30).json()
+        spend_ok = (
+            q["remaining_spend_micros"] is None
+            or q["remaining_spend_micros"] >= q["limits"]["request_spend_ceiling_micros"]
+        )
+        tokens_ok = q["remaining_tokens"] is None or q["remaining_tokens"] >= tokens
+        if spend_ok and tokens_ok:
+            return
+        reset = datetime.strptime(q["period"]["end_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        until_reset = (reset - datetime.now(timezone.utc)).total_seconds()
+        time.sleep(max(1, min(poll_s, until_reset)))
+```
+
+</CodeGroup>
+
+## Quota, credit and size limits compared
+
+| Refusal | Status | Checks | Cleared by |
+| --- | --- | --- | --- |
+| `organization_spend_quota_exhausted` | `429` | Per-request ceiling against the period's remaining spend | Holds settling, or the next period |
+| `organization_token_quota_exhausted` | `429` | Estimated tokens against the period's remaining tokens | A smaller request, or the next period |
+| [`insufficient_credits`](/guides/handling-insufficient-credits) | `402` | The run's hold against your credit balance | Buying credit, or auto-recharge |
+| [`input_too_large`](/problems/input_too_large) | `413` | The input estimate against the model's context or the input ceiling | A smaller input |
+
+## Watch it before it bites
+
+- Poll `GET /v1/quota` on a schedule and alert when `remaining_spend_micros` or `remaining_tokens` falls below what a normal day uses. Read a normal day from [`GET /v1/usage/daily`](/guides/usage-reporting#spend-per-day).
+- Keep `max_output_tokens` tight on every run. It counts in full against the token limit at admission.
+- Limit how many runs you have in flight at once. Each one holds up to 5,000 micros of the period's spend until it settles.
+
+## Related
+
+- [organization_spend_quota_exhausted](/problems/organization_spend_quota_exhausted) - the reference entry for the spend refusal.
+- [organization_token_quota_exhausted](/problems/organization_token_quota_exhausted) - the reference entry for the token refusal.
+- [Usage reporting](/guides/usage-reporting) - read what used the quota, by day and by call.
+- [Handling insufficient credits](/guides/handling-insufficient-credits) - the `402` refusal, which is about credit, not quota.
+- [Limits](/reference/limits) - every size and count limit in one table.

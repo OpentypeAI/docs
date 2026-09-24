@@ -1,0 +1,253 @@
+---
+title: "Quickstart"
+description: "Sign up, create an API key in the console, send your first decision run to OpenType, and read the probabilities it returns. About five minutes."
+icon: "rocket"
+keywords: ["getting started", "first request", "first run", "hello world", "API key", "curl"]
+---
+
+This page takes you from no account to a completed decision run: one request that asks three typed questions about a support ticket and returns a probability for every answer. It is for developers making their first call. You need a terminal with `curl`, or Node.js 18+ or Python 3 with `requests`.
+
+<Steps>
+  <Step title="Create an account">
+    Sign up at [console.opentype.dev/sign-up](https://console.opentype.dev/sign-up) and verify your email address. Verifying gives your new organization **\$5 of free credit** (5,000,000 micro-USD), once per email address. At the cost of the run below, that covers more than 250,000 runs.
+
+    The details, including the sign-in options, are on [Create an account](/getting-started/create-an-account).
+  </Step>
+  <Step title="Create an API key">
+    In the console, open [API keys](https://console.opentype.dev/keys) and choose **+ Create key**.
+
+    1. Give the key a **Name** after the process that will hold it, for example `Production ticket router`. The name is a label, not a credential.
+    2. Under **Scopes**, keep **Send requests**. It grants `runs_write` (send runs) and `runs_read` (read them back), which is all this page needs.
+    3. Choose **+ Create key and show secret**.
+    4. Choose **Copy secret**, store it somewhere safe, then choose **I have copied it**.
+
+    <Frame>
+      <img src="/images/product/api-keys-secret-shown-once.png" alt="Newly created key showing its secret once, with a Copy secret button and the key's id, prefix and scopes" width="752" height="567" />
+    </Frame>
+
+    The secret is `otsk_` followed by 64 lowercase hex characters. **It is shown once.** Only a SHA-256 hash of it is stored, so a lost secret cannot be recovered: revoke the key and create another. See [API keys](/console/api-keys).
+  </Step>
+  <Step title="Export the key">
+    Keep the key in an environment variable, never in source code.
+
+    ```bash
+    export OPENTYPE_API_KEY="otsk_..."
+    ```
+
+    Every example on this site reads the key from `OPENTYPE_API_KEY`.
+  </Step>
+  <Step title="Send a decision run">
+    This run triages a support ticket with three questions: a yes/no (`noul`), a one-of-N (`choice`), and an ordered level (`score`).
+
+    <CodeGroup>
+
+    ```bash cURL
+    curl -sS https://api.opentype.dev/v1/runs \
+      -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+      -H "Content-Type: application/json" \
+      -H "Idempotency-Key: ticket-4822-triage" \
+      -d '{
+        "kind": "decision",
+        "instructions": "You triage customer support tickets.",
+        "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+        "questions": {
+          "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+          "bucket": {"type": "choice", "instructions": "which queue?",
+                     "criteria": {"billing": "payment problems", "other": null}},
+          "tone":   {"type": "score", "instructions": "how annoyed?",
+                     "criteria": ["calm", "annoyed", "furious"]}
+        },
+        "question_order": ["urgent", "bucket", "tone"],
+        "think_tokens": 64,
+        "max_output_tokens": 16
+      }'
+    ```
+
+    ```ts TypeScript
+    const res = await fetch("https://api.opentype.dev/v1/runs", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "Content-Type": "application/json",
+        // One key per logical request. Reuse it, unchanged, when you retry this request.
+        "Idempotency-Key": "ticket-4822-triage",
+      },
+      body: JSON.stringify({
+        kind: "decision",
+        instructions: "You triage customer support tickets.",
+        state: { ticket: "I was charged twice this month and nobody answers my emails.", plan: "pro" },
+        questions: {
+          urgent: { type: "noul", instructions: "reply within the hour?" },
+          bucket: {
+            type: "choice",
+            instructions: "which queue?",
+            criteria: { billing: "payment problems", other: null },
+          },
+          tone: { type: "score", instructions: "how annoyed?", criteria: ["calm", "annoyed", "furious"] },
+        },
+        question_order: ["urgent", "bucket", "tone"],
+        think_tokens: 64,
+        max_output_tokens: 16,
+      }),
+    });
+    const run = await res.json();
+    if (!res.ok) throw new Error(`${res.status} ${run.error.code} (${run.error.request_id})`);
+    const { urgent, bucket, tone } = run.decision.answers;
+    console.log(run.run_id, urgent.probability, bucket.choice, tone.score);
+    ```
+
+    ```python Python
+    import os, requests
+
+    res = requests.post(
+        "https://api.opentype.dev/v1/runs",
+        headers={
+            "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+            # One key per logical request. Reuse it, unchanged, when you retry this request.
+            "Idempotency-Key": "ticket-4822-triage",
+        },
+        json={
+            "kind": "decision",
+            "instructions": "You triage customer support tickets.",
+            "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+            "questions": {
+                "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+                "bucket": {
+                    "type": "choice",
+                    "instructions": "which queue?",
+                    "criteria": {"billing": "payment problems", "other": None},
+                },
+                "tone": {"type": "score", "instructions": "how annoyed?", "criteria": ["calm", "annoyed", "furious"]},
+            },
+            "question_order": ["urgent", "bucket", "tone"],
+            "think_tokens": 64,
+            "max_output_tokens": 16,
+        },
+        timeout=130,  # above the 120 s maximum deadline
+    )
+    run = res.json()
+    if not res.ok:
+        raise RuntimeError(f"{res.status_code} {run['error']['code']} ({run['error']['request_id']})")
+    answers = run["decision"]["answers"]
+    print(run["run_id"], answers["urgent"]["probability"], answers["bucket"]["choice"], answers["tone"]["score"])
+    ```
+
+    </CodeGroup>
+
+    The request is synchronous: it returns `200` once the run has finished. `kind: "decision"` is required here, because a request without `kind` is treated as a verdict run. `think_tokens: 64` lets the model reason for up to 64 hidden tokens before it answers; the reasoning text is never returned.
+  </Step>
+  <Step title="Read the answers">
+    ```json
+    {
+      "run_id": "run_a4314b6cc08f4bd8814099a613abeb44",
+      "kind": "decision",
+      "state": "completed",
+      "input_digest": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+      "output_digest": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+      "decision": {
+        "answers": {
+          "bucket": {"answered_within_labels": true, "choice": "billing", "confidence": 0.71,
+                     "label_mass": 0.964, "probabilities": {"billing": 0.71, "other": 0.29}, "type": "choice"},
+          "tone":   {"answered_within_labels": true, "confidence": 0.46, "label_mass": 0.98,
+                     "legend": {"0": "calm", "1": "annoyed", "2": "furious"},
+                     "probabilities": {"0": 0.12, "1": 0.42, "2": 0.46}, "score": 1.34, "type": "score"},
+          "urgent": {"answered_within_labels": true, "label_mass": 0.991, "probability": 0.83, "type": "noul"}
+        },
+        "draws": 1,
+        "read": "slot_constrained",
+        "model": "neon-1.1",
+        "stages": [["urgent", "bucket", "tone"]],
+        "thought_tokens": 48,
+        "thought_closed": true
+      },
+      "usage": {"input_tokens": 412, "output_tokens": 23},
+      "cost_micros": 19,
+      "cost_basis": "provider_reported",
+      "replayed": false
+    }
+    ```
+
+    | Answer | How to read it |
+    | --- | --- |
+    | `urgent.probability: 0.83` | A `noul` answer is **P(yes)**: the model puts 83% on "yes". There is no `confidence` on a `noul`. |
+    | `bucket.choice: "billing"` | The most likely option. `probabilities` has every option you defined, keyed by option name. The answer also carries a `confidence`. |
+    | `tone.score: 1.34` | A `score` is the expected level, **0-indexed** on your list. `legend` maps each index to your level name, so 1.34 sits between `annoyed` (1) and `furious` (2). `probabilities` is keyed by index. |
+    | `label_mass`, `answered_within_labels` | How much of the model's probability landed on your labels. When `answered_within_labels` is `false`, the probabilities are a renormalization over labels the model did not favour, so do not treat them as calibrated. |
+    | `cost_micros: 19` | What the run cost, in micro-USD: \$0.000019. 412 input tokens round up to 18 micros and 23 output tokens to 1. See [Models and pricing](/getting-started/models-and-pricing). |
+    | `replayed: false` | This response came from a new model call, not from storage. |
+
+    `answers` keys are always sorted, whatever order you sent. `stages` shows the order the questions were read in, and `thought_tokens` how many of the 64 thinking tokens the model used.
+  </Step>
+  <Step title="Read the run back">
+    Every run is stored under its `run_id`. Fetch it with the same key; it needs `runs_read`.
+
+    <CodeGroup>
+
+    ```bash cURL
+    curl -sS https://api.opentype.dev/v1/runs/run_a4314b6cc08f4bd8814099a613abeb44 \
+      -H "Authorization: Bearer $OPENTYPE_API_KEY"
+    ```
+
+    ```ts TypeScript
+    const runId = "run_a4314b6cc08f4bd8814099a613abeb44";
+    const res = await fetch(`https://api.opentype.dev/v1/runs/${runId}`, {
+      headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+    });
+    const stored = await res.json();
+    console.log(stored.state, stored.decision?.answers.urgent.probability);
+    ```
+
+    ```python Python
+    import os, requests
+
+    run_id = "run_a4314b6cc08f4bd8814099a613abeb44"
+    res = requests.get(
+        f"https://api.opentype.dev/v1/runs/{run_id}",
+        headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+        timeout=30,
+    )
+    stored = res.json()
+    print(stored["state"], stored["decision"]["answers"]["urgent"]["probability"])
+    ```
+
+    </CodeGroup>
+
+    The stored run carries the same answers, `usage` and `cost_micros`, with `replayed: true`. It is thinner than the live response: it has no `cost_basis`, and its `decision` has no `model` or `stages`. See [Runs](/getting-started/runs#stored-runs-are-thinner).
+  </Step>
+</Steps>
+
+## Retry safely
+
+Send the same request again with the same `Idempotency-Key` and you get the stored run back with `replayed: true`. There is no second model call and no second charge. Reusing a key with a **different** body is refused with `409 idempotency_conflict`.
+
+If a run fails with a `503` or `504` before any model served it, send the retry with a **new** key: the first key stays attached to a `pending` run, and replaying it answers `202` with that run. The [Idempotency](/guides/idempotency) guide covers every case.
+
+## What goes wrong
+
+| Status and code | Cause | Fix |
+| --- | --- | --- |
+| `401` [`missing_credentials`](/problems/missing_credentials) | No `Authorization: Bearer` header, or `OPENTYPE_API_KEY` is empty in this shell. | Run `echo $OPENTYPE_API_KEY` and export it again. |
+| `401` [`invalid_credential`](/problems/invalid_credential) | The key is mistyped, truncated, or revoked. | Copy the whole 69-character secret, or create a new key. |
+| `403` [`scope_denied`](/problems/scope_denied) | The key lacks `runs_write` (to send) or `runs_read` (to read back). | Create a key with the **Send requests** scope set. |
+| `400` [`idempotency_key_required`](/problems/idempotency_key_required) | No `Idempotency-Key` header on `POST /v1/runs`. | Send one, 1 to 255 bytes. |
+| `400` [`invalid_body`](/problems/invalid_body) | Invalid JSON, a missing `Content-Type: application/json`, an unknown field, or no `max_output_tokens`. | Read `error.message`; it names the problem. |
+| `400` [`invalid_decision_questions`](/problems/invalid_decision_questions) | The question set breaks a bound, for example a `choice` with one option. | See the bounds on [Decision questions](/getting-started/decision-questions#bounds). |
+| `402` [`insufficient_credits`](/problems/insufficient_credits) | Your available balance is below the \$0.005 a run holds while it is in flight. | Verify your email to receive the free credit, or [buy credits](/guides/credits-and-billing). |
+| `413` [`input_too_large`](/problems/input_too_large) | The state and questions do not fit the 3,968-token context of Neon 1.1. | Send a smaller `state`. |
+| `503` [`decision_unavailable`](/problems/decision_unavailable) | The question set could not be read, or no route could serve it now. | Retry later with a new `Idempotency-Key`. |
+
+Every error body has the same shape. Branch on `code`, and log `request_id`:
+
+```json
+{"error": {"code": "scope_denied", "message": "the session lacks the runs_write scope", "request_id": "req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+More causes and fixes are on [Troubleshooting](/getting-started/troubleshooting) and [Errors](/reference/errors).
+
+## Related
+
+- [Decision questions](/getting-started/decision-questions) - add dependencies, conditional questions, and more options.
+- [Decision runs](/guides/decision-runs) - turn probabilities into thresholds for a real triage flow.
+- [API keys](/console/api-keys) - create, rotate, and revoke keys in the console.
+- [Scopes and roles](/security/scopes-and-roles) - which scopes a production key should hold.
+- [Limits](/reference/limits) - every size, token, and spend bound in one table.

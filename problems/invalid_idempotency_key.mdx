@@ -1,0 +1,123 @@
+---
+title: "invalid_idempotency_key"
+description: "HTTP 400 on POST /v1/runs: the Idempotency-Key header is empty, longer than 255 bytes, or not printable ASCII. How to build a valid key."
+icon: "fingerprint"
+keywords: ["invalid_idempotency_key", "Idempotency-Key", "400", "key too long", "ASCII", "POST /v1/runs", "idempotency"]
+---
+
+`invalid_idempotency_key` means a `POST /v1/runs` request sent an `Idempotency-Key` header that OpenType cannot use as a key. Read this page if you build keys from long ids, user text or non-ASCII data.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `400` | `invalid_idempotency_key` | No. Fix the key first. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+The header is present but breaks one of these rules:
+
+| Rule | Refused when |
+| --- | --- |
+| Length | the value is empty, or longer than 255 bytes |
+| Characters | the value contains anything other than printable ASCII, such as accented letters, emoji or control characters |
+
+The run was refused before it existed. Nothing was stored and nothing was charged.
+
+A missing header is a different code: [`idempotency_key_required`](/problems/idempotency_key_required).
+
+## How to fix
+
+Send 1 to 255 bytes of printable ASCII. Build the key from your own business id, so a retry of the same request carries the same key.
+
+If your id can be long or can contain other characters, hash it. A SHA-256 hex digest is always 64 ASCII characters, well inside the limit, and the same input always gives the same key.
+
+Because the request was refused before a run existed, no key was used up. Send the same body with the corrected key.
+
+## Example
+
+```json
+{"error":{"code":"invalid_idempotency_key","message":"the Idempotency-Key header is not a valid key","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Hashing a long or non-ASCII id into a valid key:
+
+<CodeGroup>
+```bash curl
+KEY=$(printf '%s' "ticket-4822-triage-Zoë" | sha256sum | cut -d' ' -f1)
+
+curl https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $KEY" \
+  -d '{
+    "kind": "decision",
+    "state": {"ticket": "I was charged twice this month."},
+    "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+    "max_output_tokens": 16
+  }'
+```
+
+```typescript TypeScript
+import { createHash } from "node:crypto";
+
+// Always 64 hex characters: printable ASCII, under 255 bytes, stable per input.
+const idempotencyKey = createHash("sha256").update("ticket-4822-triage-Zoë").digest("hex");
+
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": idempotencyKey,
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    state: { ticket: "I was charged twice this month." },
+    questions: { urgent: { type: "noul", instructions: "reply within the hour?" } },
+    max_output_tokens: 16,
+  }),
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+console.log(body.run_id);
+```
+
+```python Python
+import hashlib
+import os
+import requests
+
+# Always 64 hex characters: printable ASCII, under 255 bytes, stable per input.
+idempotency_key = hashlib.sha256("ticket-4822-triage-Zoë".encode("utf-8")).hexdigest()
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotency_key,
+    },
+    json={
+        "kind": "decision",
+        "state": {"ticket": "I was charged twice this month."},
+        "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+        "max_output_tokens": 16,
+    },
+    timeout=60,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+print(body["run_id"])
+```
+</CodeGroup>
+
+## Related
+
+- [Idempotency](/guides/idempotency) - how keys are matched, replayed and kept.
+- [idempotency_key_required](/problems/idempotency_key_required) - the header is missing altogether.
+- [Limits](/reference/limits) - every size and count limit in one table.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

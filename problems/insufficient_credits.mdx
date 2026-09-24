@@ -1,0 +1,116 @@
+---
+title: "insufficient_credits"
+description: "HTTP 402 on POST /v1/runs: the organization's credit cannot cover the run's hold. How the check works, how to add credit, and safe retries."
+icon: "wallet"
+keywords: ["insufficient_credits", "402", "payment required", "credits", "balance", "top up", "auto-recharge", "POST /v1/runs"]
+---
+
+`insufficient_credits` means your organization does not have enough prepaid credit to start a run. Read this page when runs fail with a 402, and to decide whether your service should wait, alert or top up.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `402` | `insufficient_credits` | After you add credit. Keep the same `Idempotency-Key`. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+Runs are paid from prepaid credit. Before a run starts, OpenType holds the run's full per-request spend ceiling, at most 5,000 micro-USD ($0.005), against your balance until the run settles. A run that would take the available balance below zero is refused.
+
+In practice, a run needs at least 5,000 micros of available credit to start, even though a typical decision run costs far less. Holds of runs still in flight count against the balance until they settle.
+
+When the run is refused:
+
+- The run and its hold are rolled back. Nothing was stored and nothing was charged.
+- If auto-recharge is on, a card is saved and the balance is below your threshold, a charge to that card starts in the background.
+- A replay of an `Idempotency-Key` that already owns a run is never refused with 402. It returns the stored run.
+
+Every new account gets $5 of credit (5,000,000 micros) once its email address is verified, one grant per email address.
+
+## How to fix
+
+1. Check the balance with `GET /v1/billing` (needs `billing_read`). `balance_micros` is credited minus spent minus held, and can be negative.
+2. Add credit: on the [Billing page](/console/billing), or with `POST /v1/billing/checkout` and an `amount_micros` from $5 to $1,000. The credit arrives once the payment succeeds.
+3. To avoid this in production, turn on [auto-recharge](/guides/auto-recharge). It tops up a saved card when the balance falls below your threshold, at most once per hour.
+4. Retry the run once `balance_micros` is at least 5,000. The first attempt was refused before a run existed, so reuse the same `Idempotency-Key`.
+
+Do not retry in a tight loop: until credit arrives, every attempt gets the same 402.
+
+## Example
+
+```json
+{"error":{"code":"insufficient_credits","message":"the organization's credit balance does not cover this run","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Handling the 402: report the balance, keep the key, and retry after credit arrives. The balance check needs a key with `billing_read`.
+
+<CodeGroup>
+```bash curl
+# Check the balance before retrying the run with the same Idempotency-Key.
+curl https://api.opentype.dev/v1/billing \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```typescript TypeScript
+const headers = {
+  Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+  "Content-Type": "application/json",
+};
+
+async function createRun(idempotencyKey: string, payload: unknown) {
+  const res = await fetch("https://api.opentype.dev/v1/runs", {
+    method: "POST",
+    headers: { ...headers, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json();
+
+  if (res.status === 402) {
+    const billing = await fetch("https://api.opentype.dev/v1/billing", { headers }).then((r) => r.json());
+    // Alert a human or wait for auto-recharge; then call createRun again with the SAME key.
+    throw new Error(
+      `insufficient_credits: balance ${billing.balance_micros} micros, ` +
+        `auto-recharge ${billing.auto_recharge.enabled ? "on" : "off"} (${body.error.request_id})`,
+    );
+  }
+  if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+  return body;
+}
+```
+
+```python Python
+import os
+import requests
+
+HEADERS = {"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"}
+
+
+def create_run(idempotency_key: str, payload: dict) -> dict:
+    resp = requests.post(
+        "https://api.opentype.dev/v1/runs",
+        headers={**HEADERS, "Content-Type": "application/json", "Idempotency-Key": idempotency_key},
+        json=payload,
+        timeout=60,
+    )
+    body = resp.json()
+
+    if resp.status_code == 402:
+        billing = requests.get("https://api.opentype.dev/v1/billing", headers=HEADERS, timeout=30).json()
+        # Alert a human or wait for auto-recharge; then call create_run again with the SAME key.
+        state = "on" if billing["auto_recharge"]["enabled"] else "off"
+        raise RuntimeError(
+            f"insufficient_credits: balance {billing['balance_micros']} micros, "
+            f"auto-recharge {state} ({body['error']['request_id']})"
+        )
+    if not resp.ok:
+        raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+    return body
+```
+</CodeGroup>
+
+## Related
+
+- [Handling insufficient credits](/guides/handling-insufficient-credits) - the full pattern for production services.
+- [Credits and billing](/guides/credits-and-billing) - balance, checkout and transactions.
+- [Auto-recharge](/guides/auto-recharge) - top up automatically before the balance runs out.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

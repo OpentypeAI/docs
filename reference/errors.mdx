@@ -1,0 +1,197 @@
+---
+title: "Errors"
+description: "The OpenType error envelope, what each HTTP status means, plain-text rejections, and how to retry a failed request without paying twice."
+icon: "triangle-exclamation"
+keywords: ["errors", "error envelope", "status codes", "error code", "retry", "request_id", "violations"]
+---
+
+Every OpenType error is an HTTP status plus a small JSON body with a stable `code`. This page explains the body, which part of it to write logic against, what each status family means, the handful of rejections that arrive as plain text, and how to retry `POST /v1/runs` safely. It is for anyone writing error handling against the API. Every code has its own page in the [problem catalog](/problems).
+
+## The error envelope
+
+```json
+{
+  "error": {
+    "code": "idempotency_conflict",
+    "message": "this idempotency key was already used with a different body",
+    "request_id": "req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"
+  }
+}
+```
+
+| Field | Always present | What it is |
+| --- | --- | --- |
+| `code` | yes | stable snake_case identifier. **Branch on this and nothing else.** |
+| `message` | yes | a sentence for people. It may contain a number or a scope name, and its wording may change. It never contains model output. |
+| `request_id` | yes | the id of this request, the same value as the `x-request-id` response header. Quote it when you report a problem. See [Request ids](/reference/request-ids). |
+| `violations` | only on `verdict_schema_violation` | up to 10 JSON Pointers into the rejected document, such as `/risk/score` |
+
+```json
+{"error":{"code":"verdict_schema_violation","message":"the verdict did not satisfy the schema after the permitted attempts","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d","violations":["/risk/score","/label"]}}
+```
+
+`violations` is omitted when the model returned no document at all.
+
+## Match on the code, not the message
+
+- **Write logic against `code`.** It is the contract. The same code means the same thing on every route.
+- **Use the status to classify, not to decide.** The status tells you the family: your request, your credential, your account, or the service. Two codes with the same status can need different fixes: `402 insufficient_credits` needs a purchase, `429 organization_token_quota_exhausted` needs a smaller `max_output_tokens` or a new period.
+- **Treat `message` as diagnostic text.** Log it, show it to a developer, never parse it. For example, the `deadline_exceeded` message says "before a route was chosen" even when the model call is what timed out.
+- **Handle unknown codes.** Fall back to the status family below when you meet a code your client does not know.
+
+## Status families
+
+| Status | Family | Codes | First action |
+| --- | --- | --- | --- |
+| `400` | the request is malformed | [`invalid_body`](/problems/invalid_body), [`idempotency_key_required`](/problems/idempotency_key_required), [`invalid_idempotency_key`](/problems/invalid_idempotency_key), [`invalid_run_id`](/problems/invalid_run_id), [`invalid_verdict_schema`](/problems/invalid_verdict_schema), [`invalid_decision_questions`](/problems/invalid_decision_questions), [`unknown_model`](/problems/unknown_model), [`invalid_parameter`](/problems/invalid_parameter), [`invalid_amount`](/problems/invalid_amount), [`empty_scopes`](/problems/empty_scopes), [`secret_in_path`](/problems/secret_in_path), [`malformed_key_id`](/problems/malformed_key_id) | fix the request; the message says what is wrong |
+| `401` | the credential is missing or rejected | [`missing_credentials`](/problems/missing_credentials), [`invalid_credential`](/problems/invalid_credential) | send `Authorization: Bearer otsk_...` with an active key |
+| `402` | credits cannot cover the run | [`insufficient_credits`](/problems/insufficient_credits) | add credits or turn on auto-recharge, then retry |
+| `403` | the credential is valid but not allowed | [`no_active_organization`](/problems/no_active_organization), [`scope_denied`](/problems/scope_denied), [`scope_exceeds_creator`](/problems/scope_exceeds_creator), [`principal_is_not_the_caller`](/problems/principal_is_not_the_caller) | use a credential that holds the [scope](/reference/scopes) |
+| `404` | no such resource in your organization | [`run_not_found`](/problems/run_not_found), [`key_not_found`](/problems/key_not_found) | check the id and the organization the key belongs to |
+| `409` | the request conflicts with stored state | [`idempotency_conflict`](/problems/idempotency_conflict), [`key_revoked`](/problems/key_revoked) | reuse the original body, or use a new key |
+| `413` | the body or the input is too large | [`body_too_large`](/problems/body_too_large), [`input_too_large`](/problems/input_too_large) | shrink it; see [Limits](/reference/limits) |
+| `429` | a period quota refused the run | [`organization_spend_quota_exhausted`](/problems/organization_spend_quota_exhausted), [`organization_token_quota_exhausted`](/problems/organization_token_quota_exhausted) | wait for in-flight runs to settle or for the next period, or raise the quota |
+| `500` | unexpected internal failure | [`internal_error`](/problems/internal_error) | retry once; report the `request_id` if it repeats |
+| `503` | the service cannot serve this safely right now | [`no_route_available`](/problems/no_route_available), [`decision_unavailable`](/problems/decision_unavailable), [`budget_exhausted`](/problems/budget_exhausted), [`verdict_schema_violation`](/problems/verdict_schema_violation), [`catalog_unavailable`](/problems/catalog_unavailable), [`provider_unauthorized`](/problems/provider_unauthorized), [`provider_rate_limited`](/problems/provider_rate_limited), [`provider_rejected_request`](/problems/provider_rejected_request), [`provider_unavailable`](/problems/provider_unavailable), [`provider_malformed_response`](/problems/provider_malformed_response), [`not_configured`](/problems/not_configured), [`database_unavailable`](/problems/database_unavailable), [`database_not_configured`](/problems/database_not_configured), [`billing_not_configured`](/problems/billing_not_configured), [`stripe_unavailable`](/problems/stripe_unavailable), [`auth_not_configured`](/problems/auth_not_configured), [`trust_keys_unavailable`](/problems/trust_keys_unavailable) | read the code; most are worth a retry with backoff |
+| `504` | the run's deadline passed | [`deadline_exceeded`](/problems/deadline_exceeded) | raise `deadline_ms` or shrink the input |
+
+The service fails closed: when it cannot check your credential, reach its data store, or confirm a model answer, it refuses with a 503 rather than guessing.
+
+## When to retry
+
+The status decides whether a retry can help:
+
+| Status | Retry? |
+| --- | --- |
+| `400`, `401`, `403`, `404`, `409`, `413` | No. The same request fails the same way. Fix it first. |
+| `402` | After you add credits. |
+| `429` | Later, when in-flight runs have settled or the quota period has reset. |
+| `500`, `503`, `504` | Yes, with exponential backoff and jitter. |
+
+Pick your own backoff, for example 1, 2, 4 and 8 seconds with jitter, and stop after a few attempts.
+
+### Retrying POST /v1/runs
+
+`POST /v1/runs` requires an `Idempotency-Key`. Which key you send on a retry depends on what you got back:
+
+| What happened | Retry with |
+| --- | --- |
+| No response: timeout, connection reset, process restart | the **same** key. If the first attempt reached the service, you get its stored run back instead of a second charge: `200` when it finished, `202` with `"state": "pending"` when it did not. Set your client timeout above 120 seconds, the longest `deadline_ms`. |
+| `202` with `"state": "pending"` on a replay | a **new** key. The original attempt failed before a model answered, and that run stays `pending`. |
+| Any `400`, `401`, `402`, `403` or `429`, and `413 body_too_large` | the same key is safe after you fix the cause: nothing was stored under it. |
+| `413 input_too_large` | a **new** key once the input is smaller. An input over the model's own limit (3,968 tokens for Neon 1.1) is refused after the run is recorded, so that key is taken. |
+| `409 idempotency_conflict` | the original body with the same key, or the new body with a new key. |
+| A `500`, `503` or `504` | a **new** key. A run that failed before a model answered stays `pending` under its key, and a run that failed after a model answered is stored as `failed`; replaying that key returns the stored run instead of trying again. |
+
+<Warning>
+Retrying a `503` with the same `Idempotency-Key` can return `202` with `"state": "pending"` indefinitely. Send a new key after any 5xx or 504 response.
+</Warning>
+
+See [Idempotency](/guides/idempotency) for key design and [Error handling](/guides/error-handling) for a complete retry loop.
+
+## Plain-text rejections
+
+A few rejections come from the HTTP layer before a route's own validation runs. Their body is `text/plain`, not JSON, and has no `request_id`. The `x-request-id` response header is still present.
+
+| Status | Body begins with | Cause |
+| --- | --- | --- |
+| `400` | `Failed to parse the request body as JSON` | malformed JSON |
+| `400` | `Failed to deserialize query string` | an unknown or malformed query parameter on a `/v1/usage` route |
+| `413` | `Failed to buffer the request body` | a body over 1 MiB |
+| `415` | ``Expected request with `Content-Type: application/json` `` | missing or wrong `Content-Type` on a JSON route |
+| `422` | `Failed to deserialize the JSON body into the target type` | a wrong type, a missing required field, or an unknown field |
+| `404` | empty | unknown path |
+| `405` | empty | known path, wrong method |
+
+Some bodies add `: ` and a detail, such as the name of the unknown field.
+
+The 400, 413, 415 and 422 rows apply to the keys, usage and billing routes; the 404 and 405 rows apply everywhere. The runs routes turn the same body and query problems into JSON: `400 invalid_body` and `413 body_too_large`.
+
+**Parse defensively.** Read the body as text, try to decode it as JSON, and fall back to the status when that fails.
+
+<CodeGroup>
+
+```bash cURL
+# -i prints the status line and the x-request-id header even when the body is plain text.
+curl -sS -i https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ci-pipeline", "scopes": ["runs_write"], "expires_at": "2027-01-01T00:00:00Z"}'
+# HTTP/1.1 422 ... Failed to deserialize the JSON body into the target type: ...
+```
+
+```ts TypeScript
+type ApiError = { status: number; code: string; message: string; requestId: string | null };
+
+async function readError(res: Response): Promise<ApiError> {
+  const requestId = res.headers.get("x-request-id");
+  const text = await res.text();
+  try {
+    const { error } = JSON.parse(text);
+    return { status: res.status, code: error.code, message: error.message, requestId: error.request_id };
+  } catch {
+    // Plain-text rejection: no code in the body, so classify by status.
+    return { status: res.status, code: `http_${res.status}`, message: text, requestId };
+  }
+}
+
+const res = await fetch("https://api.opentype.dev/v1/runs/run_a4314b6cc08f4bd8814099a613abeb44", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+if (!res.ok) {
+  const err = await readError(res);
+  console.error(`${err.status} ${err.code} (${err.requestId}): ${err.message}`);
+}
+```
+
+```python Python
+import os, requests
+
+def read_error(res: requests.Response) -> dict:
+    request_id = res.headers.get("x-request-id")
+    try:
+        error = res.json()["error"]
+        return {"status": res.status_code, "code": error["code"],
+                "message": error["message"], "request_id": error["request_id"]}
+    except (ValueError, KeyError, TypeError):
+        # Plain-text rejection: no code in the body, so classify by status.
+        return {"status": res.status_code, "code": f"http_{res.status_code}",
+                "message": res.text, "request_id": request_id}
+
+res = requests.get(
+    "https://api.opentype.dev/v1/runs/run_a4314b6cc08f4bd8814099a613abeb44",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+if not res.ok:
+    err = read_error(res)
+    print(f"{err['status']} {err['code']} ({err['request_id']}): {err['message']}")
+```
+
+</CodeGroup>
+
+## Errors on POST /v1/runs, in order
+
+`POST /v1/runs` checks a request in a fixed order and stops at the first failure, so fixing one error can reveal the next:
+
+1. Credential: `401`, `403 no_active_organization`, `503 auth_not_configured` or `trust_keys_unavailable`.
+2. Body: `400 invalid_body`, `413 body_too_large`.
+3. Scope: `403 scope_denied` without `runs_write`.
+4. `Idempotency-Key`: `400 idempotency_key_required` or `invalid_idempotency_key`.
+5. Prompt shape, then the schema or question set, then capability hints: `400 invalid_body`, `invalid_verdict_schema`, `invalid_decision_questions`.
+6. Input size: `413 input_too_large` above 64,000 estimated tokens.
+7. Data store: `503 database_unavailable` or `not_configured`.
+8. Period quota: `429`.
+9. Idempotency: `409 idempotency_conflict` when the key was used with a different body.
+10. Credits: `402 insufficient_credits`.
+11. Routing and the model call: `503`, `504`, or `413 input_too_large` when the input is over Neon 1.1's 3,968-token limit.
+
+A replay of a key that already owns a run skips the quota and credit checks, so it is never refused with `429` or `402`.
+
+## Related
+
+- [Problem catalog](/problems) - every code, its status, and whether a retry helps.
+- [Error handling](/guides/error-handling) - a retry loop you can copy.
+- [Idempotency](/guides/idempotency) - when to reuse and when to replace a key.
+- [Request ids](/reference/request-ids) - trace one failed request.
+- [Limits](/reference/limits) - the bounds behind 400 and 413 errors.

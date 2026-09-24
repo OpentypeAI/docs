@@ -1,0 +1,362 @@
+---
+title: "Usage reporting"
+description: "Read your organization's runs, tokens and spend: totals for a window, a daily series, the per-call ledger, and the cost of one run."
+icon: "chart-line"
+keywords: ["usage", "ledger", "daily usage", "spend", "tokens", "reporting", "reconciliation", "usage_read"]
+---
+
+The usage routes tell you what your organization ran and what it cost, from a monthly total down to a single model call. Use them to build dashboards, to reconcile your own records against your bill, and to size [auto-recharge](/guides/auto-recharge) and [quotas](/guides/spend-limits-and-quotas). The [Usage page in the console](/console/usage) shows the same figures without code.
+
+## Routes
+
+All four routes need the `usage_read` scope and return data for the credential's organization only. Every role holds `usage_read`; a key only has it if it was created with it.
+
+| Route | Returns | Window filters on |
+| --- | --- | --- |
+| `GET /v1/usage` | Run counts, token totals and spend over a window | run creation time |
+| `GET /v1/usage/daily` | One row per UTC day, at most 92 days | run creation time |
+| `GET /v1/usage/ledger` | One row per model call, newest first | call creation time |
+| `GET /v1/usage/runs/{run_id}` | One run's tokens, spend, ceiling and calls | none |
+
+`GET /v1/quota` also needs `usage_read`; it is covered in [Spend limits and quotas](/guides/spend-limits-and-quotas).
+
+Every amount is an integer in micro-USD: 1,000,000 micros is 1 US dollar. Timestamps are UTC in exactly `YYYY-MM-DDTHH:MM:SSZ` form, and daily dates are `YYYY-MM-DD`.
+
+## Windows
+
+`GET /v1/usage`, `GET /v1/usage/daily` and `GET /v1/usage/ledger` take an optional window.
+
+| Parameter | Rule |
+| --- | --- |
+| `start_at` | Inclusive. Exactly `YYYY-MM-DDTHH:MM:SSZ`, a real calendar date, UTC, whole seconds. |
+| `end_at` | Exclusive. Same format. Must be after `start_at`. |
+| Both omitted | The current quota period: the current UTC calendar month, from the first of the month at 00:00:00Z to the first of next month at 00:00:00Z |
+| Only one sent | Refused: `start_at and end_at must be supplied together` |
+
+Windows are half-open, `[start_at, end_at)`. To read September 2026, send `start_at=2026-09-01T00:00:00Z` and `end_at=2026-10-01T00:00:00Z`. Offsets such as `+02:00`, fractional seconds and dates without a time are refused.
+
+## Totals for a window
+
+<CodeGroup>
+
+```bash curl
+curl -sS "https://api.opentype.dev/v1/usage?start_at=2026-09-01T00:00:00Z&end_at=2026-10-01T00:00:00Z" \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const params = new URLSearchParams({
+  start_at: "2026-09-01T00:00:00Z",
+  end_at: "2026-10-01T00:00:00Z",
+});
+const res = await fetch(`https://api.opentype.dev/v1/usage?${params}`, {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+if (!res.ok) throw new Error(`usage read failed: ${res.status}`);
+const usage = await res.json();
+console.log(`${usage.runs.completed} runs completed, $${usage.spend.settled_micros / 1_000_000} settled`);
+```
+
+```python Python
+import os
+import requests
+
+res = requests.get(
+    "https://api.opentype.dev/v1/usage",
+    params={"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+res.raise_for_status()
+usage = res.json()
+print(f"{usage['runs']['completed']} runs completed, ${usage['spend']['settled_micros'] / 1_000_000} settled")
+```
+
+</CodeGroup>
+
+```json
+{
+  "organization_id": "org_example",
+  "window": {"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
+  "runs": {"total": 3, "completed": 2, "failed": 0, "in_flight": 1},
+  "tokens": {"input_tokens": 824, "output_tokens": 46, "total_tokens": 870},
+  "spend": {"reserved_micros": 5038, "settled_micros": 38, "unsettled_micros": 5000}
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `runs.total` | Runs created in the window |
+| `runs.completed`, `runs.failed` | Of those, how many ended in each state |
+| `runs.in_flight` | Of those, how many have not settled (state `pending`) |
+| `tokens` | Input, output and total tokens over every model call those runs made |
+| `spend.settled_micros` | What those model calls cost |
+| `spend.reserved_micros` | Per run, the larger of its hold and its cost while the hold is still in place; otherwise its cost |
+| `spend.unsettled_micros` | `reserved_micros - settled_micros`, never below 0: what is still held for runs that have not settled |
+
+In the example, two settled runs cost 38 micros and one run in flight holds its 5,000-micro ceiling.
+
+<Note>
+A run that fails before any model call is made keeps state `pending`, so it stays counted in `in_flight` with no cost. See [Polling](/guides/polling).
+</Note>
+
+## Spend per day
+
+`GET /v1/usage/daily` returns one row per UTC date, oldest first, with days that had no runs filled with zeros. It is the series to chart, and the one to use when you size auto-recharge.
+
+- The rows run from the date of `start_at` through the date of the last instant before `end_at`.
+- `end_at - start_at` must be at most 92 days.
+
+<CodeGroup>
+
+```bash curl
+curl -sS "https://api.opentype.dev/v1/usage/daily?start_at=2026-09-22T00:00:00Z&end_at=2026-09-25T00:00:00Z" \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const params = new URLSearchParams({
+  start_at: "2026-09-22T00:00:00Z",
+  end_at: "2026-09-25T00:00:00Z",
+});
+const res = await fetch(`https://api.opentype.dev/v1/usage/daily?${params}`, {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+const { days } = await res.json();
+for (const d of days) console.log(d.date, d.runs, d.spend_micros);
+```
+
+```python Python
+import os
+import requests
+
+res = requests.get(
+    "https://api.opentype.dev/v1/usage/daily",
+    params={"start_at": "2026-09-22T00:00:00Z", "end_at": "2026-09-25T00:00:00Z"},
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+res.raise_for_status()
+for d in res.json()["days"]:
+    print(d["date"], d["runs"], d["spend_micros"])
+```
+
+</CodeGroup>
+
+```json
+{
+  "organization_id": "org_example",
+  "window": {"start_at": "2026-09-22T00:00:00Z", "end_at": "2026-09-25T00:00:00Z"},
+  "days": [
+    {"date": "2026-09-22", "runs": 0, "input_tokens": 0, "output_tokens": 0, "spend_micros": 0},
+    {"date": "2026-09-23", "runs": 1, "input_tokens": 412, "output_tokens": 23, "spend_micros": 19},
+    {"date": "2026-09-24", "runs": 2, "input_tokens": 412, "output_tokens": 23, "spend_micros": 19}
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `date` | The UTC day, `YYYY-MM-DD` |
+| `runs` | Runs created that day |
+| `input_tokens`, `output_tokens` | Tokens used by those runs |
+| `spend_micros` | What the model calls of those runs cost |
+
+A day's figures follow the run's creation time, so a run created at 23:59:59Z counts on the day it started.
+
+To cover more than 92 days, request consecutive windows and join the rows.
+
+## The ledger
+
+`GET /v1/usage/ledger` lists one entry per model call, newest first. Use it to audit individual charges.
+
+| Parameter | Rule |
+| --- | --- |
+| `start_at`, `end_at` | The window, filtered on when the call was made |
+| `limit` | Default 50. Values above 200 are lowered to 200. `0` is refused with `limit must be at least 1`. |
+
+There is no offset or cursor. To read further back, keep `start_at` at the start of the range you want and set `end_at` to one second after the `created_at` of the oldest entry you received and ask again. Because `end_at` is exclusive and timestamps have whole-second precision, that page repeats the entries from that last second, so skip entries you have already stored, keyed on `run_id` plus `retry_ordinal`.
+
+<CodeGroup>
+
+```bash curl
+curl -sS "https://api.opentype.dev/v1/usage/ledger?limit=2" \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/usage/ledger?limit=200", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+const { entries } = await res.json();
+const failed = entries.filter((e: { status: string }) => e.status === "failed");
+console.log(`${entries.length} calls, ${failed.length} failed`);
+```
+
+```python Python
+import os
+import requests
+
+res = requests.get(
+    "https://api.opentype.dev/v1/usage/ledger",
+    params={"limit": 200},
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+res.raise_for_status()
+entries = res.json()["entries"]
+failed = [e for e in entries if e["status"] == "failed"]
+print(f"{len(entries)} calls, {len(failed)} failed")
+```
+
+</CodeGroup>
+
+```json
+{
+  "organization_id": "org_example",
+  "window": {"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
+  "limit": 2,
+  "entries": [
+    {
+      "run_id": "run_a4314b6c-c08f-4bd8-8140-99a613abeb44",
+      "retry_ordinal": 0,
+      "provider": "opentype",
+      "model_id": "neon-1.1",
+      "provider_request_id": null,
+      "status": "succeeded",
+      "tokens": {"input_tokens": 412, "output_tokens": 23, "total_tokens": 435},
+      "cost_micros": 19,
+      "created_at": "2026-09-24T09:14:02Z"
+    },
+    {
+      "run_id": "run_bdfb7c7c-c4f5-4770-bdb3-2d78ef08d78d",
+      "retry_ordinal": 0,
+      "provider": "opentype",
+      "model_id": "neon-1.1",
+      "provider_request_id": null,
+      "status": "succeeded",
+      "tokens": {"input_tokens": 412, "output_tokens": 23, "total_tokens": 435},
+      "cost_micros": 19,
+      "created_at": "2026-09-23T17:40:51Z"
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `run_id` | The run this call belongs to, in the hyphenated form (see below) |
+| `retry_ordinal` | The call's position within its run |
+| `provider` | `opentype` |
+| `model_id` | `neon-1.1` |
+| `provider_request_id` | A string, or `null` |
+| `status` | `succeeded` or `failed` |
+| `tokens` | Input, output and total tokens for this call |
+| `cost_micros` | What this call cost |
+| `created_at` | When the call was made |
+
+A run that fails after the model answered is charged for what it consumed, so a `failed` entry can carry a cost.
+
+## One run
+
+`GET /v1/usage/runs/{run_id}` returns one run's accounting, with its calls in `retry_ordinal` order.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/usage/runs/run_a4314b6cc08f4bd8814099a613abeb44 \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const runId = "run_a4314b6cc08f4bd8814099a613abeb44"; // the run_id from POST /v1/runs
+const res = await fetch(`https://api.opentype.dev/v1/usage/runs/${runId}`, {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+if (res.status === 404) throw new Error("no such run in this organization");
+const run = await res.json();
+console.log(run.state, run.spend.settled_micros, "of", run.ceiling_micros);
+```
+
+```python Python
+import os
+import requests
+
+run_id = "run_a4314b6cc08f4bd8814099a613abeb44"  # the run_id from POST /v1/runs
+res = requests.get(
+    f"https://api.opentype.dev/v1/usage/runs/{run_id}",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+res.raise_for_status()
+run = res.json()
+print(run["state"], run["spend"]["settled_micros"], "of", run["ceiling_micros"])
+```
+
+</CodeGroup>
+
+```json
+{
+  "run_id": "run_a4314b6c-c08f-4bd8-8140-99a613abeb44",
+  "organization_id": "org_example",
+  "state": "completed",
+  "created_at": "2026-09-24T09:14:01Z",
+  "tokens": {"input_tokens": 412, "output_tokens": 23, "total_tokens": 435},
+  "spend": {"reserved_micros": 19, "settled_micros": 19, "unsettled_micros": 0},
+  "ceiling_micros": 5000,
+  "attempts": [
+    {
+      "run_id": "run_a4314b6c-c08f-4bd8-8140-99a613abeb44",
+      "retry_ordinal": 0,
+      "provider": "opentype",
+      "model_id": "neon-1.1",
+      "provider_request_id": null,
+      "status": "succeeded",
+      "tokens": {"input_tokens": 412, "output_tokens": 23, "total_tokens": 435},
+      "cost_micros": 19,
+      "created_at": "2026-09-24T09:14:02Z"
+    }
+  ]
+}
+```
+
+`ceiling_micros` is the most this run was allowed to spend, at most 5,000. `attempts` has the same fields as a ledger entry.
+
+## Two spellings of a run id
+
+The runs API returns `run_` plus 32 hex characters, such as `run_a4314b6cc08f4bd8814099a613abeb44`. The usage routes return the same id with hyphens, such as `run_a4314b6c-c08f-4bd8-8140-99a613abeb44`. Both name the same run, and every route accepts either form.
+
+To join usage rows to your own run records, normalize before comparing:
+
+```ts
+const normalizeRunId = (id: string) => id.toLowerCase().replaceAll("-", "");
+```
+
+```python
+def normalize_run_id(run_id: str) -> str:
+    return run_id.lower().replace("-", "")
+```
+
+## Errors
+
+| Status | Code | When | What to do |
+| --- | --- | --- | --- |
+| `400` | [`invalid_parameter`](/problems/invalid_parameter) | `start_at and end_at must be supplied together` | Send both bounds or neither |
+| `400` | [`invalid_parameter`](/problems/invalid_parameter) | `start_at must be an RFC 3339 UTC timestamp such as 2026-02-01T00:00:00Z` (or the same for `end_at`) | Use exactly `YYYY-MM-DDTHH:MM:SSZ` |
+| `400` | [`invalid_parameter`](/problems/invalid_parameter) | `start_at must be before end_at` | Swap or fix the bounds |
+| `400` | [`invalid_parameter`](/problems/invalid_parameter) | `the window must span at most 92 days` (daily only) | Split the range into windows of 92 days or less |
+| `400` | [`invalid_parameter`](/problems/invalid_parameter) | `limit must be at least 1` (ledger only) | Send a `limit` from 1 to 200 |
+| `400` | [`invalid_parameter`](/problems/invalid_parameter) | `run_id must start with run_` or `run_id must carry a uuid` | Pass the `run_id` the API returned |
+| `401` | [`missing_credentials`](/problems/missing_credentials), [`invalid_credential`](/problems/invalid_credential) | No bearer, or a wrong, unknown or revoked key | Check the key |
+| `403` | [`scope_denied`](/problems/scope_denied) | `the session lacks the usage_read scope` | Use a key created with `usage_read` |
+| `404` | [`run_not_found`](/problems/run_not_found) | `no such run`: the run does not exist or belongs to another organization | Check the id and which organization the key belongs to |
+| `503` | [`database_unavailable`](/problems/database_unavailable), [`database_not_configured`](/problems/database_not_configured) | Usage storage is unavailable | Retry with backoff |
+
+An unknown query parameter, such as `from=`, or a non-numeric `limit` is refused with a plain-text `400` that has no JSON envelope. Use only the parameters listed on this page.
+
+## Related
+
+- [Spend limits and quotas](/guides/spend-limits-and-quotas) - read `GET /v1/quota` and handle the `429` codes.
+- [Credits and billing](/guides/credits-and-billing) - how usage turns into daily transactions on your balance.
+- [Usage in the console](/console/usage) - the same figures without code.
+- [Models and pricing](/getting-started/models-and-pricing) - how each call's `cost_micros` is computed.

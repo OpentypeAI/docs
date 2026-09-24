@@ -1,0 +1,126 @@
+---
+title: "verdict_schema_violation"
+description: "HTTP 503 on POST /v1/runs: the model's verdict still broke your schema after the permitted attempts. Read the violations array and loosen the schema."
+icon: "file-circle-xmark"
+keywords: ["verdict_schema_violation", "503", "violations", "JSON Pointer", "verdict run", "schema", "POST /v1/runs"]
+---
+
+`verdict_schema_violation` means a verdict run produced output that did not satisfy your JSON Schema, even after a repair attempt. Read this page to find which fields failed and how to change the schema so the run succeeds.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `verdict_schema_violation` | Yes, with a new `Idempotency-Key`, ideally after you loosen the schema. |
+
+## What happened
+
+Route: `POST /v1/runs`, verdict runs.
+
+<Note>
+Neon 1.1 does not serve verdict runs. Today every verdict run is refused earlier with [no_route_available](/problems/no_route_available), so you only see this code once a model that serves verdicts is available. See [Verdict runs](/guides/verdict-runs).
+</Note>
+
+A verdict run gets at most two model calls: the answer, then one repair if the answer does not validate. When the output still breaks the schema after both, or was not a JSON document at all, the run fails with this code. OpenType never returns a verdict that does not validate.
+
+This is the only error that carries an extra field:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `violations` | array of strings | Up to 10 JSON Pointers into the rejected document, such as `/risk/score`. Omitted when the output was not a document at all. |
+
+The message is always "the verdict did not satisfy the schema after the permitted attempts". The rejected document itself is never returned.
+
+If the model served at least one call, the run is settled as `failed` and a replay with the same `Idempotency-Key` returns `200` with `"state": "failed"`, not the error again.
+
+## How to fix
+
+1. **Read `violations`.** Each pointer names a field that failed. Look at that field's rules in your schema.
+2. **Loosen what failed.** Common fixes: widen an `enum`, drop a tight `pattern`, relax `minimum`/`maximum`, make a rarely needed field optional, and remove `anyOf` or recursion where a flat object will do.
+3. **Retry with a new `Idempotency-Key`.** A changed schema is a new request. Retrying the unchanged request with a new key can succeed, because model output varies, but repeated failures on the same pointers mean the schema needs to change.
+
+## Example
+
+```json
+{"error":{"code":"verdict_schema_violation","message":"the verdict did not satisfy the schema after the permitted attempts","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d","violations":["/risk/score","/label"]}}
+```
+
+Reading `violations` from the error body:
+
+<CodeGroup>
+```bash curl
+curl -sS https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"kind":"verdict","messages":[{"role":"user","content":"Order 1182 arrived cracked. I want my money back."}],"schema":{"type":"object","properties":{"intent":{"type":"string","enum":["refund","exchange","question"]}},"required":["intent"],"additionalProperties":false},"max_output_tokens":64}' \
+  | jq '.error | select(.code == "verdict_schema_violation") | .violations'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": crypto.randomUUID(),
+  },
+  body: JSON.stringify({
+    kind: "verdict",
+    messages: [{ role: "user", content: "Order 1182 arrived cracked. I want my money back." }],
+    schema: {
+      type: "object",
+      properties: { intent: { type: "string", enum: ["refund", "exchange", "question"] } },
+      required: ["intent"],
+      additionalProperties: false,
+    },
+    max_output_tokens: 64,
+  }),
+});
+const data = await res.json();
+
+if (data.error?.code === "verdict_schema_violation") {
+  // Up to 10 JSON Pointers into the rejected document; absent when there was no document.
+  const paths: string[] = data.error.violations ?? [];
+  console.error(`schema violated at ${paths.join(", ") || "(no document)"} (${data.error.request_id})`);
+}
+```
+
+```python Python
+import os
+import uuid
+
+import requests
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Idempotency-Key": str(uuid.uuid4()),
+    },
+    json={
+        "kind": "verdict",
+        "messages": [{"role": "user", "content": "Order 1182 arrived cracked. I want my money back."}],
+        "schema": {
+            "type": "object",
+            "properties": {"intent": {"type": "string", "enum": ["refund", "exchange", "question"]}},
+            "required": ["intent"],
+            "additionalProperties": False,
+        },
+        "max_output_tokens": 64,
+    },
+    timeout=130,
+)
+err = resp.json().get("error", {})
+if err.get("code") == "verdict_schema_violation":
+    # Up to 10 JSON Pointers into the rejected document; absent when there was no document.
+    paths = err.get("violations", [])
+    print(f"schema violated at {', '.join(paths) or '(no document)'} ({err['request_id']})")
+```
+</CodeGroup>
+
+## Related
+
+- [Verdict runs](/guides/verdict-runs) - schema bounds, the repair attempt and `schema_enforcement`.
+- [invalid_verdict_schema](/problems/invalid_verdict_schema) - the 400 for a schema refused before the run.
+- [Idempotency](/guides/idempotency) - when to reuse an `Idempotency-Key` and when to send a new one.
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

@@ -1,0 +1,126 @@
+---
+title: "body_too_large"
+description: "HTTP 413 on POST /v1/runs: the request body is over 1 MiB. What counts toward the cap, how to shrink the body, and what other routes return."
+icon: "weight-hanging"
+keywords: ["body_too_large", "413", "payload too large", "1 MiB", "body size", "POST /v1/runs"]
+---
+
+`body_too_large` means the body of a `POST /v1/runs` request is larger than OpenType accepts. Read this page if you send large documents, transcripts or JSON states in a run.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `413` | `body_too_large` | No. Shrink the body first. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+The body is over 1 MiB (1,048,576 bytes). The whole body counts: the prompt or `state`, the schema or questions, and the JSON syntax around them. The request was refused before a run existed. Nothing was stored and nothing was charged.
+
+On every other route, a body over 1 MiB is refused with a plain-text 413 whose body begins `Failed to buffer the request body`, not with this JSON error. The response still carries the `x-request-id` header.
+
+<Note>
+A body under 1 MiB can still be too large to run. Runs are also limited by their estimated input tokens, and a decision run's input must fit Neon 1.1's context of 3,968 tokens. Those limits return [`input_too_large`](/problems/input_too_large).
+</Note>
+
+## How to fix
+
+1. Measure the encoded body in bytes, not characters: non-ASCII text takes more than one byte per character.
+2. Send only what the questions need. Drop unused fields from `state`, strip markup, and remove whitespace and pretty-printing from the JSON.
+3. Split a long document into several runs.
+4. Send the smaller request. The refused one never created a run, so its `Idempotency-Key` is still free and you may reuse it for the smaller body.
+
+## Example
+
+```json
+{"error":{"code":"body_too_large","message":"the request body exceeds the size cap","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Checking the size before sending:
+
+<CodeGroup>
+```bash curl
+# body.json holds the run request.
+SIZE=$(wc -c < body.json)
+if [ "$SIZE" -gt 1048576 ]; then
+  echo "body is $SIZE bytes; the cap is 1048576" >&2
+  exit 1
+fi
+
+curl https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-triage" \
+  --data-binary @body.json
+```
+
+```typescript TypeScript
+const MAX_BODY_BYTES = 1_048_576;
+
+const payload = {
+  kind: "decision",
+  state: { ticket: "I was charged twice this month." },
+  questions: { urgent: { type: "noul", instructions: "reply within the hour?" } },
+  max_output_tokens: 16,
+};
+const body = JSON.stringify(payload); // compact, no pretty-printing
+const size = new TextEncoder().encode(body).length;
+if (size > MAX_BODY_BYTES) throw new Error(`body is ${size} bytes; split the input`);
+
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4822-triage",
+  },
+  body,
+});
+
+const run = await res.json();
+if (!res.ok) throw new Error(`${run.error.code}: ${run.error.message}`);
+console.log(run.run_id);
+```
+
+```python Python
+import json
+import os
+
+import requests
+
+MAX_BODY_BYTES = 1_048_576
+
+payload = {
+    "kind": "decision",
+    "state": {"ticket": "I was charged twice this month."},
+    "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+    "max_output_tokens": 16,
+}
+body = json.dumps(payload, separators=(",", ":")).encode("utf-8")  # compact
+if len(body) > MAX_BODY_BYTES:
+    raise ValueError(f"body is {len(body)} bytes; split the input")
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "ticket-4822-triage",
+    },
+    data=body,
+    timeout=60,
+)
+
+run = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{run['error']['code']}: {run['error']['message']}")
+print(run["run_id"])
+```
+</CodeGroup>
+
+## Related
+
+- [Limits](/reference/limits) - the body cap next to every other limit.
+- [input_too_large](/problems/input_too_large) - the body fits, but the input is too many tokens.
+- [Conventions](/reference/conventions) - content type, body size and other request rules.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

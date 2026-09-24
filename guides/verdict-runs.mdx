@@ -1,0 +1,238 @@
+---
+title: "Verdict runs"
+description: "The verdict run contract: messages and a JSON Schema in, one validated JSON document out. Neon 1.1 does not serve verdict runs today."
+icon: "file-code"
+keywords: ["verdict", "kind verdict", "JSON Schema", "schema", "messages", "structured output", "schema_enforcement", "verdict_schema_violation", "no_route_available"]
+---
+
+<Warning>
+Neon 1.1 does not serve verdict runs. Today every verdict run is refused with `503 no_route_available`. To get a typed answer now, use a [decision run](/guides/decision-runs): most extraction and classification tasks fit a set of [choice](/guides/choice-questions), [noul](/guides/noul-questions) and [score](/guides/score-questions) questions.
+</Warning>
+
+A verdict run sends a conversation and a JSON Schema, and returns one JSON document that has passed that schema. This page documents the contract, so you know which fields exist, which bounds a schema must stay within, and which errors a verdict run can return. It is for developers who plan for verdict runs, or who received a `no_route_available` and want to know why.
+
+## Decision or verdict
+
+| | Decision run | Verdict run |
+| --- | --- | --- |
+| `kind` | `"decision"` | `"verdict"`, the default when `kind` is absent |
+| You send | a `state` and typed `questions` | `messages` and a JSON `schema` |
+| You get | `decision`: a probability for every answer | `verdict`: one JSON document valid against your schema |
+| Model calls | exactly 1 | at most 2: the answer plus one repair |
+| Served by Neon 1.1 | yes | no: `503 no_route_available` |
+
+Because `kind` defaults to `"verdict"`, a decision request that forgets `"kind": "decision"` is treated as a verdict run. It is then refused with `400 invalid_body`, for example `state is only valid on a decision run`.
+
+## The request
+
+| Field | Type | Required | Default | Rules |
+| --- | --- | --- | --- | --- |
+| `kind` | string | no | `"verdict"` | |
+| `messages` | array | yes | | Non-empty. Each item is `{"role": "user" or "assistant", "content": string}`, and unknown keys are refused. |
+| `system` | string | no | none | Instructions for the whole conversation. |
+| `schema` | object | yes | | A JSON Schema within the [schema bounds](#schema-bounds). |
+| `max_output_tokens` | integer | **yes** | | Must be greater than 0. |
+| `deadline_ms` | integer | no | `30000` | Clamped to 1 to 120,000. |
+| `capability_hint` | array of strings | no | `[]` | Values from `chat`, `reasoning`, `tools`, `vision`, `streaming`, `embedding`, `structured_read`. At most 7, no duplicates. Can only narrow routing. |
+
+The same headers as every run apply: `Authorization: Bearer $OPENTYPE_API_KEY` with the `runs_write` scope, `Content-Type: application/json`, and an `Idempotency-Key` of 1 to 255 bytes of visible text.
+
+Decision fields are refused on a verdict run with `400 invalid_body`: `state`, `questions`, `instructions`, `draws`, `think_tokens` and `question_order` each give `<field> is only valid on a decision run`.
+
+```json intent.json
+{
+  "messages": [
+    {"role": "user", "content": "Order 1182 arrived cracked. I want my money back."}
+  ],
+  "schema": {
+    "type": "object",
+    "properties": {"intent": {"type": "string", "enum": ["refund", "exchange", "question"]}},
+    "required": ["intent"],
+    "additionalProperties": false
+  },
+  "max_output_tokens": 64
+}
+```
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4821-intent" \
+  -d @intent.json
+```
+
+```ts TypeScript
+import { readFileSync } from "node:fs";
+
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4821-intent",
+  },
+  body: readFileSync("intent.json", "utf8"),
+});
+const run = await res.json();
+if (res.status === 503 && run.error.code === "no_route_available") {
+  // Expected today: Neon 1.1 does not serve verdict runs. Use a decision run instead.
+} else if (!res.ok) {
+  throw new Error(`${res.status} ${run.error.code} (${run.error.request_id})`);
+}
+```
+
+```python Python
+import os
+import requests
+
+with open("intent.json") as f:
+    body = f.read()
+
+res = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "ticket-4821-intent",
+    },
+    data=body,
+    timeout=130,
+)
+run = res.json()
+if res.status_code == 503 and run["error"]["code"] == "no_route_available":
+    pass  # Expected today: Neon 1.1 does not serve verdict runs. Use a decision run instead.
+elif not res.ok:
+    raise RuntimeError(f"{res.status_code} {run['error']['code']} ({run['error']['request_id']})")
+```
+
+</CodeGroup>
+
+Today the response is:
+
+```json
+{
+  "error": {
+    "code": "no_route_available",
+    "message": "no eligible route is available for this request",
+    "request_id": "req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"
+  }
+}
+```
+
+## The response
+
+When a route can serve it, a completed verdict run returns the run fields plus `verdict`, the validated document. This example shows the shape, not a response you can get today:
+
+```json
+{
+  "run_id": "run_bdfb7c7cc4f54770bdb32d78ef08d78d",
+  "kind": "verdict",
+  "state": "completed",
+  "input_digest": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+  "output_digest": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d",
+  "verdict": {"intent": "refund"},
+  "usage": {"input_tokens": 61, "output_tokens": 9},
+  "cost_micros": 3,
+  "cost_basis": "provider_reported",
+  "schema_enforcement": "enforced",
+  "replayed": false
+}
+```
+
+### `schema_enforcement`
+
+A live verdict response says how the schema bound the answer. Every returned `verdict` passed validation against your schema, whatever this value is.
+
+| Value | Meaning |
+| --- | --- |
+| `unconstrained` | Nothing bound the answer except OpenType's own validation. |
+| `requested` | The schema was offered to the model, but the model was not bound by it. |
+| `forced` | The model was compelled into the schema slot, but the answer was not checked upstream. |
+| `enforced` | Decoding was constrained to the schema. |
+
+`schema_enforcement` and `cost_basis` appear only on the live response to `POST /v1/runs`. A stored copy of the run, from `GET /v1/runs/{run_id}`, the stream or a replayed `Idempotency-Key`, omits both.
+
+## Schema bounds
+
+A schema is checked before any model call. One that breaks a bound is refused with `400 invalid_verdict_schema`, and nothing is charged.
+
+| Bound | Limit |
+| --- | --- |
+| Type | A JSON object |
+| Size | 32 KiB, measured on the canonical form |
+| Nesting depth | 12 |
+| Nested subschemas | 64 |
+| Properties | 512 |
+| `pattern` length | 256 characters or fewer |
+| `$ref` | A local pointer beginning with `#`, pointing at a subschema within the same schema |
+| Refused keywords | `$id`, `id`, `$anchor`, `$dynamicAnchor`, `$dynamicRef`, `$recursiveAnchor`, `$recursiveRef`, and any unrecognised keyword with a structured value |
+| Validity | The schema must compile as JSON Schema |
+
+The message is `the verdict schema is not acceptable: ` followed by the reason:
+
+- `schema must be a JSON object`
+- `schema is larger than the permitted size`
+- `schema nests deeper than permitted`
+- `schema nests more subschemas than permitted`
+- `schema declares more properties than permitted`
+- `schema $ref must be a local pointer beginning with #`
+- `schema $ref must be a string`
+- `schema $ref must point at a subschema within the same schema`
+- `schema uses a keyword whose references cannot be bounded: $id, id, $anchor, $dynamicAnchor, $dynamicRef, $recursiveAnchor, $recursiveRef`
+- `schema uses an unrecognised keyword with a structured value`
+- `schema pattern is longer than permitted`
+- `schema is not a valid JSON Schema`
+
+`capability_hint` mistakes use the same code: `too many capability hints`, `duplicate capability hints`, `too many capability needs`. They do so on decision runs too.
+
+```json
+{
+  "error": {
+    "code": "invalid_verdict_schema",
+    "message": "the verdict schema is not acceptable: schema $ref must point at a subschema within the same schema",
+    "request_id": "req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"
+  }
+}
+```
+
+## Attempts and `verdict_schema_violation`
+
+A verdict run gets at most two model calls: the answer, and one repair when the answer does not pass the schema. When the second attempt still breaks the schema, or does not produce a document at all, the run fails with `503 verdict_schema_violation`. The error carries `violations`, up to 10 JSON Pointers into the rejected document:
+
+```json
+{
+  "error": {
+    "code": "verdict_schema_violation",
+    "message": "the verdict did not satisfy the schema after the permitted attempts",
+    "request_id": "req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d",
+    "violations": ["/risk/score", "/label"]
+  }
+}
+```
+
+- Only this code carries `violations`. The field is absent when the model returned no document.
+- The attempts that ran were model calls, so the run is settled `failed` and charged what they cost.
+- A replay of the same `Idempotency-Key` returns that failed run with `200` and `"state": "failed"`. It does not run again. To try again, loosen the schema, or send the same body with a new key.
+
+## What goes wrong
+
+| Status | Code | Cause | Fix |
+| --- | --- | --- | --- |
+| `503` | [`no_route_available`](/problems/no_route_available) | No route serves verdict runs. This is every verdict run today. | Use a [decision run](/guides/decision-runs). |
+| `400` | [`invalid_verdict_schema`](/problems/invalid_verdict_schema) | The schema breaks a [bound](#schema-bounds), or `capability_hint` has too many or duplicate values | Fix the schema. Nothing was charged. |
+| `400` | [`invalid_body`](/problems/invalid_body) | `schema` missing, `messages` empty, a decision field sent, or an unknown field | Fix the body. |
+| `503` | [`verdict_schema_violation`](/problems/verdict_schema_violation) | Both attempts broke the schema | Read `violations`, loosen the schema, retry with a new `Idempotency-Key`. |
+| `504` | [`deadline_exceeded`](/problems/deadline_exceeded) | The deadline passed | Raise `deadline_ms`, retry with a new key. |
+
+After a `503 no_route_available`, a replay with the same `Idempotency-Key` returns `202` with the stored run still `pending`. It is never picked up again, so do not poll it: send any later attempt with a new key.
+
+## Related
+
+- [Decision runs](/guides/decision-runs) - the run kind Neon 1.1 serves today.
+- [Runs](/getting-started/runs) - run kinds, states and the fields every run returns.
+- [no_route_available](/problems/no_route_available) - what the refusal means and what to do.
+- [invalid_verdict_schema](/problems/invalid_verdict_schema) - every reason a schema is refused.
+- [Limits](/reference/limits) - every per-request limit in one table.

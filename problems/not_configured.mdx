@@ -1,0 +1,112 @@
+---
+title: "not_configured"
+description: "HTTP 503 on /v1/runs routes: something the run needs is not configured on the service. Retry later; nothing in your request causes it."
+icon: "gears"
+keywords: ["not_configured", "503", "service unavailable", "POST /v1/runs", "GET /v1/runs", "configuration"]
+---
+
+`not_configured` means the service is missing a part it needs to handle runs. Read this page when a runs route answers with this code; it is a service-side problem.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `not_configured` | Later, with backoff. For `POST /v1/runs`, use a new `Idempotency-Key`. |
+
+## What happened
+
+Routes: `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream`.
+
+Something a run needs is not configured: the data store, the service's model list, the component that chooses a model, the model service, or the connection for the model chosen for this run. This is how the runs routes spell it; other routes use the more specific [database_not_configured](/problems/database_not_configured) or [billing_not_configured](/problems/billing_not_configured).
+
+On `POST /v1/runs` the refusal can come before or after the run is admitted. If it came after, the run is stored as `pending` and is never charged; a replay with the same `Idempotency-Key` returns `202` with that pending run.
+
+## How to fix
+
+- Retry after a few minutes with backoff. A fast loop gets the same answer.
+- On `POST /v1/runs`, use a **new** `Idempotency-Key` for the retry.
+- `GET` routes have no key; retry them as they are.
+- If it persists, report the `request_id`.
+
+## Example
+
+```json
+{"error":{"code":"not_configured","message":"a required dependency is not configured","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Retrying a read with backoff and your own request id:
+
+<CodeGroup>
+```bash curl
+for attempt in 1 2 3 4; do
+  STATUS=$(curl -sS -o response.json -w '%{http_code}' "https://api.opentype.dev/v1/runs?limit=20" \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "x-request-id: $(uuidgen)")
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # back off, then try again
+    *) break ;;
+  esac
+done
+cat response.json
+```
+
+```typescript TypeScript
+async function getWithRetry(path: string, maxAttempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    const requestId = crypto.randomUUID();
+    const res = await fetch(`https://api.opentype.dev${path}`, {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "x-request-id": requestId, // log it; quote it if the problem persists
+      },
+    });
+    if (res.ok) return res.json();
+
+    const code = (await res.json().catch(() => null))?.error?.code ?? `HTTP ${res.status}`;
+    console.error(`GET ${path} -> ${res.status} ${code} (${requestId})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${requestId})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const data = await getWithRetry("/v1/runs?limit=20"); // needs runs_read
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+def get_with_retry(path: str, max_attempts: int = 4) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        request_id = str(uuid.uuid4())
+        resp = requests.get(
+            f"https://api.opentype.dev{path}",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                "x-request-id": request_id,  # log it; quote it if the problem persists
+            },
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()
+
+        try:
+            code = resp.json()["error"]["code"]
+        except ValueError:
+            code = f"HTTP {resp.status_code}"
+        print(f"GET {path} -> {resp.status_code} {code} ({request_id})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{code} ({request_id})")
+        time.sleep(2 ** attempt)
+
+data = get_with_retry("/v1/runs?limit=20")  # needs runs_read
+```
+</CodeGroup>
+
+## Related
+
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Idempotency](/guides/idempotency) - when to reuse an `Idempotency-Key` and when to send a new one.
+- [Request ids](/reference/request-ids) - send your own `x-request-id` and quote it when you report a problem.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

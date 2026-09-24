@@ -1,0 +1,149 @@
+---
+title: "invalid_amount"
+description: "HTTP 400 on checkout and auto-recharge: an amount out of bounds, not whole cents, a threshold too high, or a missing value. Every message and fix."
+icon: "money-bill"
+keywords: ["invalid_amount", "400", "amount_micros", "threshold_micros", "checkout", "auto-recharge", "billing", "micro-USD"]
+---
+
+`invalid_amount` means a billing request carried an amount OpenType will not charge. Read this page when buying credits or configuring auto-recharge fails with a 400.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `400` | `invalid_amount` | No. Fix the amount first. |
+
+## What happened
+
+Routes:
+
+- `POST /v1/billing/checkout`
+- `PUT /v1/billing/auto-recharge`
+
+Amounts are integers in micro-USD: 1,000,000 micros is $1 and 10,000 micros is one cent. Nothing was charged and no setting was changed. These are every message:
+
+| Message | Cause |
+| --- | --- |
+| `amount_micros must be between 5000000 and 1000000000` | `amount_micros` is below $5 or above $1,000 |
+| `amount_micros must be a whole number of cents` | `amount_micros` is not a multiple of 10,000 |
+| `threshold_micros must not exceed 1000000000` | auto-recharge `threshold_micros` is above $1,000 |
+| `threshold_micros and amount_micros are required when enabled` | `"enabled": true` without both numbers |
+
+The bounds:
+
+| Field | Route | Accepted |
+| --- | --- | --- |
+| `amount_micros` | checkout and auto-recharge | 5,000,000 to 1,000,000,000 ($5 to $1,000), a multiple of 10,000 |
+| `threshold_micros` | auto-recharge | at most 1,000,000,000 ($1,000); required when `enabled` is `true` |
+
+## How to fix
+
+1. Convert dollars to micros by multiplying by 1,000,000, and round to whole cents first: $25.00 is `25000000`.
+2. Keep `amount_micros` between `5000000` and `1000000000`.
+3. When you enable auto-recharge, send `enabled`, `threshold_micros` and `amount_micros` together.
+4. Send the corrected request. The refused one changed nothing.
+
+## Example
+
+```json
+{"error":{"code":"invalid_amount","message":"amount_micros must be a whole number of cents","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Buying $25 of credits. The call needs `billing_write` and returns a hosted Stripe checkout page; the credit arrives after payment.
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/billing/checkout \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"amount_micros": 25000000}'
+```
+
+```typescript TypeScript
+const dollars = 25;
+// Whole cents, then micros: 1 cent = 10,000 micros.
+const amountMicros = Math.round(dollars * 100) * 10_000;
+
+const res = await fetch("https://api.opentype.dev/v1/billing/checkout", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ amount_micros: amountMicros }),
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+console.log(body.checkout_url); // send the buyer here
+```
+
+```python Python
+import os
+import requests
+
+dollars = 25
+# Whole cents, then micros: 1 cent = 10,000 micros.
+amount_micros = round(dollars * 100) * 10_000
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/billing/checkout",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}", "Content-Type": "application/json"},
+    json={"amount_micros": amount_micros},
+    timeout=30,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+print(body["checkout_url"])  # send the buyer here
+```
+</CodeGroup>
+
+Enabling auto-recharge: top up $20 whenever the balance falls below $5.
+
+<CodeGroup>
+```bash curl
+curl -X PUT https://api.opentype.dev/v1/billing/auto-recharge \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "threshold_micros": 5000000, "amount_micros": 20000000}'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/billing/auto-recharge", {
+  method: "PUT",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ enabled: true, threshold_micros: 5_000_000, amount_micros: 20_000_000 }),
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+console.log(body.auto_recharge);
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.put(
+    "https://api.opentype.dev/v1/billing/auto-recharge",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}", "Content-Type": "application/json"},
+    json={"enabled": True, "threshold_micros": 5_000_000, "amount_micros": 20_000_000},
+    timeout=30,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+print(body["auto_recharge"])
+```
+</CodeGroup>
+
+## Related
+
+- [Credits and billing](/guides/credits-and-billing) - balance, checkout and the transaction list.
+- [Auto-recharge](/guides/auto-recharge) - how the threshold and the top-up amount work.
+- [Billing in the console](/console/billing) - add credit without writing code.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

@@ -1,0 +1,103 @@
+---
+title: "The OpenType console"
+sidebarTitle: "Console overview"
+description: "What the console at console.opentype.dev does: the Playground, API keys, Usage and Billing pages, what the header shows, and what your role lets you do."
+icon: "desktop"
+keywords: ["console", "dashboard", "console.opentype.dev", "workspace", "overview"]
+---
+
+The OpenType console at [console.opentype.dev](https://console.opentype.dev) is where you try decision runs by hand, create the API keys your code uses, read what your organization spent, and add credit. Read this page first if you have just signed in, or if you need to know which console page does what and which role it takes.
+
+Everything the console shows comes from the public API at `https://api.opentype.dev`, called as you. The Playground, keys, usage and billing controls each map to an API route, so you can do the same from code with an API key.
+
+## Get in
+
+Open [console.opentype.dev](https://console.opentype.dev) and sign in with Google, GitHub, an email and password, or a one-time code sent by email. Sign-up is open: a new account gets its own organization and $5 of free credit once its email address is verified. [Sign in to the console](/console/sign-in) walks through every screen, and [Create an account](/getting-started/create-an-account) covers the credit grant.
+
+The console opens on the Playground. The bare address `https://console.opentype.dev/` redirects there.
+
+## The pages
+
+The sidebar has one section, **Workspace**, with four pages in this order.
+
+| Page | Address | What you do there |
+| --- | --- | --- |
+| **Playground** | `/playground` | Write a state and some typed questions, run one decision read, and see every answer with its cost |
+| **API keys** | `/keys` | Create a key, copy its secret once, see when each key was last used, and revoke keys |
+| **Usage** | `/usage` | Runs, tokens, spend and error rate over 24 hours, 7 days or 30 days; the period quota; the request log |
+| **Billing** | `/billing` | The credit balance, Add funds, auto-recharge, saved cards and receipts, and the transaction list |
+
+<CardGroup cols={2}>
+  <Card title="Sign in to the console" icon="right-to-bracket" href="/console/sign-in">
+    Sign-in methods, codes, password reset, email verification, and choosing an organization.
+  </Card>
+  <Card title="Playground" icon="flask" href="/console/playground">
+    Run a decision read by hand, read the answers, and copy the request as cURL.
+  </Card>
+  <Card title="API keys" icon="key" href="/console/api-keys">
+    Create a key in two steps, keep the secret, and revoke keys you no longer need.
+  </Card>
+  <Card title="Usage" icon="chart-column" href="/console/usage">
+    Totals, the runs-per-day chart, the period quota, and one row per model call.
+  </Card>
+  <Card title="Billing" icon="credit-card" href="/console/billing">
+    Balance, Add funds, auto-recharge, cards and receipts, and transactions.
+  </Card>
+</CardGroup>
+
+## What the frame shows
+
+The frame around every page is the same.
+
+| Where | What it shows |
+| --- | --- |
+| Top bar | The OpenType mark (a link back to the Playground), your **organization name**, your **role** in that organization, and **Sign out** |
+| Sidebar, top | Your organization's initials and name, with its current **balance** underneath, for example `balance $4.98` |
+| Sidebar, middle | **Workspace**: Playground, API keys, Usage, Billing |
+| Sidebar, bottom | **Spend this period**: what the organization has spent in the current quota period against its spend cap, as `$0.02 / no cap` or `$0.02 / $50.00`, with a bar that fills toward the cap |
+
+The quota period is the current calendar month in UTC. Spend this period counts settled spend plus what runs still in flight are holding. When no spend cap is set on your organization the line reads `no cap`. See [Spend limits and quotas](/guides/spend-limits-and-quotas).
+
+A dash in place of a figure, such as `balance —`, means that one read failed, for example because billing is not switched on for the deployment. The rest of the page still works.
+
+## Messages at the top of a page
+
+**Welcome** and **The organization was not created** appear on the Playground; the others appear above whichever page you open.
+
+| Message | What it means | What to do |
+| --- | --- | --- |
+| **Welcome. $5.00 of credit is on your account.** | Your organization was just created and the sign-up credit landed | Run the example the Playground loads, then create a key |
+| **Your account has no organization yet** | You are signed in, but setting up your organization did not finish | Type a name (optional) and choose **Create organization**. See [Sign in to the console](/console/sign-in#your-account-has-no-organization-yet) |
+| **The organization was not created: email_not_verified** | The organization needs a verified email address | Sign out, sign in again, and enter the code emailed to you |
+| **The API is not reachable right now. Figures on this page are withheld until it answers.** | The console could not reach `api.opentype.dev` | Wait a moment and reload. Nothing is shown as zero in the meantime |
+| **The API refused this session: {code}** | Your session was refused, with the code shown | Sign out and sign in again. Look the code up in [Errors](/reference/errors) if it persists |
+
+## What your role lets you do
+
+The console calls the API as you, so each page needs the scopes your role grants in the organization. A page you cannot use shows the refusal, usually `403 scope_denied`, instead of hiding the page.
+
+| Page | Needs | Roles that have it |
+| --- | --- | --- |
+| Playground, **Run** | `runs_write` | owner, admin, member |
+| API keys, list | `keys_read` | owner, admin, member, viewer |
+| API keys, create and revoke | `keys_write` | owner, admin, member |
+| Usage | `usage_read` | owner, admin, member, billing, viewer |
+| Billing, read the balance and transactions | `billing_read` | owner, admin, member, billing, viewer |
+| Billing, Add funds, auto-recharge, cards and receipts | `billing_write` | owner, admin, billing |
+
+A key you create in the console can only hold scopes your own role holds. See [Organizations and roles](/getting-started/organizations-and-roles) and [Scopes](/reference/scopes).
+
+## What the console does not do
+
+- **No verdict runs.** The Playground builds decision runs only. Send verdict runs from code; see [Verdict runs](/guides/verdict-runs).
+- **No key rotation.** Rotate a key through the API; see [Key rotation](/guides/key-rotation).
+- **No organization switcher.** To work in another organization you belong to, sign out, sign in again, and pick it on **Choose an organization**.
+- **No member management.** The console has no page for inviting or removing people.
+
+## Related
+
+- [Quickstart](/getting-started/quickstart) - create a key and send your first decision run from code.
+- [Sign in to the console](/console/sign-in) - every sign-in and sign-up screen, and what its messages mean.
+- [Playground](/console/playground) - try a decision read before you write any code.
+- [Credits and billing](/guides/credits-and-billing) - how prepaid credit is held, spent and settled.
+- [Organizations and roles](/getting-started/organizations-and-roles) - what each role can do across the console and the API.

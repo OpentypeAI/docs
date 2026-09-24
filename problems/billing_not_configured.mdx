@@ -1,0 +1,110 @@
+---
+title: "billing_not_configured"
+description: "HTTP 503 on /v1/billing routes: billing is not configured on the service, so balance, checkout, portal and auto-recharge are unavailable."
+icon: "credit-card"
+keywords: ["billing_not_configured", "503", "billing", "checkout", "portal", "auto-recharge", "GET /v1/billing"]
+---
+
+`billing_not_configured` means the billing routes are switched off on the service you called. Read this page when a billing call answers with this code.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `billing_not_configured` | Later. Nothing in your request can fix it. |
+
+## What happened
+
+Routes: `GET /v1/billing`, `POST /v1/billing/checkout`, `POST /v1/billing/portal`, `PUT /v1/billing/auto-recharge`.
+
+The payment settings the billing routes need are absent, so every billing route answers with this code. The scope is checked first: a key without `billing_read` (for `GET`) or `billing_write` (for the others) gets `403 scope_denied` instead.
+
+Nothing was created: no checkout page, no portal session, and no change to auto-recharge.
+
+## How to fix
+
+- Retry later. It is a service-side configuration problem, and retrying at once gets the same answer.
+- If it persists, report the `request_id`.
+
+## Example
+
+```json
+{"error":{"code":"billing_not_configured","message":"billing is not configured","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Reading the balance, with backoff on 5xx:
+
+<CodeGroup>
+```bash curl
+for attempt in 1 2 3 4; do
+  STATUS=$(curl -sS -o response.json -w '%{http_code}' "https://api.opentype.dev/v1/billing" \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "x-request-id: $(uuidgen)")
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # back off, then try again
+    *) break ;;
+  esac
+done
+cat response.json
+```
+
+```typescript TypeScript
+async function getWithRetry(path: string, maxAttempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    const requestId = crypto.randomUUID();
+    const res = await fetch(`https://api.opentype.dev${path}`, {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "x-request-id": requestId, // log it; quote it if the problem persists
+      },
+    });
+    if (res.ok) return res.json();
+
+    const code = (await res.json().catch(() => null))?.error?.code ?? `HTTP ${res.status}`;
+    console.error(`GET ${path} -> ${res.status} ${code} (${requestId})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${requestId})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const data = await getWithRetry("/v1/billing"); // needs billing_read
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+def get_with_retry(path: str, max_attempts: int = 4) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        request_id = str(uuid.uuid4())
+        resp = requests.get(
+            f"https://api.opentype.dev{path}",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                "x-request-id": request_id,  # log it; quote it if the problem persists
+            },
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()
+
+        try:
+            code = resp.json()["error"]["code"]
+        except ValueError:
+            code = f"HTTP {resp.status_code}"
+        print(f"GET {path} -> {resp.status_code} {code} ({request_id})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{code} ({request_id})")
+        time.sleep(2 ** attempt)
+
+data = get_with_retry("/v1/billing")  # needs billing_read
+```
+</CodeGroup>
+
+## Related
+
+- [Credits and billing](/guides/credits-and-billing) - balance, checkout and transactions.
+- [Billing](/console/billing) - the console page that uses these routes once billing is available.
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

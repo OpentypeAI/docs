@@ -1,3 +1,4 @@
-node_modules/
+# Mintlify local preview
 .mintlify/
+node_modules/
 .DS_Store

@@ -1,0 +1,171 @@
+---
+title: "invalid_verdict_schema"
+description: "HTTP 400 on POST /v1/runs: the verdict schema or the capability hints were refused. Every reason, the bounds behind it, and how to fix it."
+icon: "code"
+keywords: ["invalid_verdict_schema", "400", "JSON Schema", "verdict", "schema bounds", "capability_hint", "$ref", "POST /v1/runs"]
+---
+
+`invalid_verdict_schema` means OpenType refused the JSON Schema of a verdict run, or the `capability_hint` list of any run. Read this page when a run is refused with this code and you need to know which bound the schema broke.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `400` | `invalid_verdict_schema` | No. Fix the schema or the hints first. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+OpenType checks every schema against fixed bounds before it admits a run. The schema, or the capability hints, broke one of them. The run was refused before it existed. Nothing was stored and nothing was charged.
+
+Every message starts with `the verdict schema is not acceptable: ` and ends with one of these reasons. The limits in the right-hand column are not part of the message text.
+
+### Size and shape
+
+| Reason | Bound |
+| --- | --- |
+| `schema must be a JSON object` | `schema` is an object, not an array, a string or `true` |
+| `schema is larger than the permitted size` | at most 32 KiB, measured on the canonical JSON |
+| `schema nests deeper than permitted` | nesting depth at most 12 |
+| `schema nests more subschemas than permitted` | at most 64 nested subschemas |
+| `schema declares more properties than permitted` | at most 512 properties |
+| `schema pattern is longer than permitted` | each `pattern` at most 256 characters |
+| `schema is not a valid JSON Schema` | the schema must compile as JSON Schema |
+
+### References and keywords
+
+| Reason | Bound |
+| --- | --- |
+| `schema $ref must be a string` | `$ref` holds a string |
+| `schema $ref must be a local pointer beginning with #` | only local references such as `#/$defs/address`; no URLs or file names |
+| `schema $ref must point at a subschema within the same schema` | the pointer must resolve inside this schema |
+| `schema uses a keyword whose references cannot be bounded` | `$id`, `id`, `$anchor`, `$dynamicAnchor`, `$dynamicRef`, `$recursiveAnchor` and `$recursiveRef` are refused |
+| `schema uses an unrecognised keyword with a structured value` | a keyword JSON Schema does not define, whose value is an object or an array |
+
+### Capability hints
+
+These reasons use this code on decision runs too.
+
+| Reason | Bound |
+| --- | --- |
+| `too many capability hints` | `capability_hint` holds at most 7 values |
+| `duplicate capability hints` | each value appears once |
+| `too many capability needs` | at most 7 capability needs in total |
+
+The accepted `capability_hint` values are `chat`, `reasoning`, `tools`, `vision`, `streaming`, `embedding` and `structured_read`. Hints can only narrow routing.
+
+## How to fix
+
+1. Find the reason after the prefix in the tables above.
+2. Flatten deep nesting, split very large schemas into smaller runs, or move shared parts under `$defs` and point at them with local `#/...` references.
+3. Remove `$id`, `$anchor` and the other identity keywords. Inline or `$defs` the subschema instead.
+4. Remove duplicate and unneeded `capability_hint` values.
+5. Send the corrected request. It was refused before a run existed, so you may keep the same `Idempotency-Key`.
+
+<Warning>
+Neon 1.1 does not serve verdict runs. A verdict run whose schema passes these checks returns [`no_route_available`](/problems/no_route_available) today. The checks on this page still apply, and still run first.
+</Warning>
+
+A schema that passes these checks can also fail later: if no answer satisfies it after the permitted attempts, the run ends with [`verdict_schema_violation`](/problems/verdict_schema_violation).
+
+## Example
+
+```json
+{"error":{"code":"invalid_verdict_schema","message":"the verdict schema is not acceptable: schema must be a JSON object","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+A verdict request whose schema stays inside every bound. It passes validation; the run itself returns `no_route_available` until a model that serves verdicts is available.
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4821-intent" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "Order 1182 arrived cracked. I want my money back."}
+    ],
+    "schema": {
+      "type": "object",
+      "properties": {"intent": {"type": "string", "enum": ["refund", "exchange", "question"]}},
+      "required": ["intent"],
+      "additionalProperties": false
+    },
+    "max_output_tokens": 64
+  }'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4821-intent",
+  },
+  body: JSON.stringify({
+    messages: [{ role: "user", content: "Order 1182 arrived cracked. I want my money back." }],
+    schema: {
+      type: "object",
+      properties: { intent: { type: "string", enum: ["refund", "exchange", "question"] } },
+      required: ["intent"],
+      additionalProperties: false,
+    },
+    max_output_tokens: 64,
+  }),
+});
+
+const body = await res.json();
+if (!res.ok) {
+  if (body.error.code === "invalid_verdict_schema") {
+    // The reason follows "the verdict schema is not acceptable: ".
+    console.error(body.error.message);
+  }
+  throw new Error(`${body.error.code} (${body.error.request_id})`);
+}
+console.log(body.verdict);
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "ticket-4821-intent",
+    },
+    json={
+        "messages": [
+            {"role": "user", "content": "Order 1182 arrived cracked. I want my money back."}
+        ],
+        "schema": {
+            "type": "object",
+            "properties": {"intent": {"type": "string", "enum": ["refund", "exchange", "question"]}},
+            "required": ["intent"],
+            "additionalProperties": False,
+        },
+        "max_output_tokens": 64,
+    },
+    timeout=60,
+)
+
+body = resp.json()
+if not resp.ok:
+    err = body["error"]
+    if err["code"] == "invalid_verdict_schema":
+        # The reason follows "the verdict schema is not acceptable: ".
+        print(err["message"])
+    raise RuntimeError(f"{err['code']} ({err['request_id']})")
+print(body["verdict"])
+```
+</CodeGroup>
+
+## Related
+
+- [Verdict runs](/guides/verdict-runs) - how a verdict run uses your schema.
+- [Limits](/reference/limits) - the schema bounds next to every other limit.
+- [verdict_schema_violation](/problems/verdict_schema_violation) - the schema was accepted but no answer satisfied it.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

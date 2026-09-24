@@ -1,0 +1,118 @@
+---
+title: "trust_keys_unavailable"
+description: "HTTP 503 on any protected route: the service could not verify your credential because its key store or signing keys were unavailable. Retry."
+icon: "key"
+keywords: ["trust_keys_unavailable", "503", "authentication", "credential", "API key", "session token", "retry"]
+---
+
+`trust_keys_unavailable` means the service could not finish checking your credential because the data it checks against was unavailable. Read this page when calls that normally work fail with this code; your credential is not the problem.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `trust_keys_unavailable` | Yes, with backoff. |
+
+## What happened
+
+Routes: every protected `/v1/*` route.
+
+The check depends on the kind of credential:
+
+| Credential | What was unavailable |
+| --- | --- |
+| API key (`otsk_...`) | the key store failed during the lookup |
+| Console session token | the signing keys used to verify it were stale or could not be fetched |
+
+The request was refused before any work was done. Nothing was stored or charged. Your credential was not rejected: a wrong, unknown or revoked key answers `401 invalid_credential` instead.
+
+## How to fix
+
+- Retry with backoff (for example 2, 4, 8 and 16 seconds). Log the `request_id` of every failed attempt.
+- Do not rotate or delete your key because of this code.
+- On `POST /v1/runs` the same `Idempotency-Key` is safe to reuse: the request was refused before a run existed.
+- If it persists for several minutes, report a `request_id`.
+
+## Example
+
+```json
+{"error":{"code":"trust_keys_unavailable","message":"the trust keys are unavailable","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Retrying with backoff and your own request id:
+
+<CodeGroup>
+```bash curl
+for attempt in 1 2 3 4; do
+  STATUS=$(curl -sS -o response.json -w '%{http_code}' "https://api.opentype.dev/v1/quota" \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "x-request-id: $(uuidgen)")
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # back off, then try again
+    *) break ;;
+  esac
+done
+cat response.json
+```
+
+```typescript TypeScript
+async function getWithRetry(path: string, maxAttempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    const requestId = crypto.randomUUID();
+    const res = await fetch(`https://api.opentype.dev${path}`, {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "x-request-id": requestId, // log it; quote it if the problem persists
+      },
+    });
+    if (res.ok) return res.json();
+
+    const code = (await res.json().catch(() => null))?.error?.code ?? `HTTP ${res.status}`;
+    console.error(`GET ${path} -> ${res.status} ${code} (${requestId})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${requestId})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const data = await getWithRetry("/v1/quota"); // needs usage_read
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+def get_with_retry(path: str, max_attempts: int = 4) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        request_id = str(uuid.uuid4())
+        resp = requests.get(
+            f"https://api.opentype.dev{path}",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                "x-request-id": request_id,  # log it; quote it if the problem persists
+            },
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()
+
+        try:
+            code = resp.json()["error"]["code"]
+        except ValueError:
+            code = f"HTTP {resp.status_code}"
+        print(f"GET {path} -> {resp.status_code} {code} ({request_id})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{code} ({request_id})")
+        time.sleep(2 ** attempt)
+
+data = get_with_retry("/v1/quota")  # needs usage_read
+```
+</CodeGroup>
+
+## Related
+
+- [Authentication](/security/authentication) - how a credential is checked.
+- [invalid_credential](/problems/invalid_credential) - the 401 when the credential itself is rejected.
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Request ids](/reference/request-ids) - send your own `x-request-id` and quote it when you report a problem.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

@@ -1,0 +1,260 @@
+---
+title: "Conditional questions"
+description: "Order questions with depends_on, ask a question only when another answer matches with ask_if, read skipped answers, and isolate a question with alone."
+icon: "code-branch"
+keywords: ["depends_on", "ask_if", "alone", "skipped", "stages", "conditional", "gating", "follow-up question"]
+---
+
+Some questions only make sense after another one has been answered: ask whether a ticket is a sales lead only when it is not about billing, and rate the lead only when it is one. Three optional fields on every question type handle this: `depends_on` orders questions into stages, `ask_if` asks a question only when an earlier answer matches, and `alone` reads a question on its own. This page is for developers building question sets with follow-ups.
+
+Everything here happens inside one decision run and one model call. You do not chain requests yourself.
+
+## The three fields
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `depends_on` | array of question ids | Read this question in a stage after every question listed. |
+| `ask_if` | object: question id to an array of answer names | Ask this question only when the named question's answer is one of the listed names. Otherwise the answer is `skipped`. |
+| `alone` | boolean | `true` reads this question on its own rather than jointly with the other questions in its stage. |
+
+They work the same on `noul`, `choice` and `score` questions.
+
+## A worked example
+
+This set extends the ticket triage from the [decision runs guide](/guides/decision-runs) with two follow-ups:
+
+- `sales_lead` is asked only when `bucket` comes back `other`.
+- `lead_value` is asked only when `sales_lead` comes back `yes`.
+
+```json triage-followups.json
+{
+  "kind": "decision",
+  "instructions": "You triage customer support tickets.",
+  "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+  "questions": {
+    "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+    "bucket": {"type": "choice", "instructions": "which queue?",
+               "criteria": {"billing": "payment problems", "other": null}},
+    "tone":   {"type": "score", "instructions": "how annoyed?",
+               "criteria": ["calm", "annoyed", "furious"]},
+    "sales_lead": {"type": "noul", "instructions": "is the customer asking to buy more?",
+                   "depends_on": ["bucket"],
+                   "ask_if": {"bucket": ["other"]}},
+    "lead_value": {"type": "score", "instructions": "how large is the opportunity?",
+                   "criteria": ["small", "medium", "large"],
+                   "depends_on": ["sales_lead"],
+                   "ask_if": {"sales_lead": ["yes"]}}
+  },
+  "question_order": ["urgent", "bucket", "tone", "sales_lead", "lead_value"],
+  "max_output_tokens": 16
+}
+```
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-triage-followups" \
+  -d @triage-followups.json
+```
+
+```ts TypeScript
+import { readFileSync } from "node:fs";
+
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4822-triage-followups",
+  },
+  body: readFileSync("triage-followups.json", "utf8"),
+});
+const run = await res.json();
+if (!res.ok) throw new Error(`${res.status} ${run.error.code} (${run.error.request_id})`);
+console.log(run.decision.stages); // [["urgent","bucket","tone"],["sales_lead"],["lead_value"]]
+```
+
+```python Python
+import os
+import requests
+
+with open("triage-followups.json") as f:
+    body = f.read()
+
+res = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "ticket-4822-triage-followups",
+    },
+    data=body,
+    timeout=130,
+)
+run = res.json()
+if not res.ok:
+    raise RuntimeError(f"{res.status_code} {run['error']['code']} ({run['error']['request_id']})")
+print(run["decision"]["stages"])  # [["urgent", "bucket", "tone"], ["sales_lead"], ["lead_value"]]
+```
+
+</CodeGroup>
+
+When `bucket` comes back `billing`, as it does for this ticket, neither follow-up is asked. An abridged, illustrative `decision` part of the response, without `draws`, `read`, `model`, `label_mass` and `answered_within_labels`:
+
+```json
+{
+  "decision": {
+    "answers": {
+      "bucket": {"type": "choice", "choice": "billing",
+                 "probabilities": {"billing": 0.71, "other": 0.29}, "confidence": 0.71},
+      "lead_value": {"type": "skipped",
+                     "because": {"question": "sales_lead", "required": ["yes"]}},
+      "sales_lead": {"type": "skipped",
+                     "because": {"question": "bucket", "answered": "billing", "required": ["other"]}},
+      "tone": {"type": "score", "score": 1.34,
+               "legend": {"0": "calm", "1": "annoyed", "2": "furious"},
+               "probabilities": {"0": 0.12, "1": 0.42, "2": 0.46}, "confidence": 0.46},
+      "urgent": {"type": "noul", "probability": 0.83}
+    },
+    "stages": [["urgent", "bucket", "tone"], ["sales_lead"], ["lead_value"]]
+  }
+}
+```
+
+## Stages and `depends_on`
+
+A stage holds every question whose `depends_on` questions are all in earlier stages. Questions with no dependencies form the first stage. Within a stage, questions follow `question_order`, or sorted ids when you leave it out. The live response reports the schedule that ran in `decision.stages`.
+
+In the example, `sales_lead` depends on `bucket`, so it moves to the second stage, and `lead_value` depends on `sales_lead`, so it moves to the third.
+
+- **Forward references are allowed.** A question may depend on one that appears later in `questions` or in `question_order`. The schedule comes from the dependencies, not from the order you wrote them in.
+- **No cycles.** If `a` depends on `b` and `b` depends on `a`, directly or through other questions, the set is refused with `400 invalid_decision_questions`: `the questions depend on each other in a cycle`.
+- **No self-references.** A question cannot name itself in `depends_on` or `ask_if`.
+- **Only questions in the set.** Every `depends_on` entry must be another question id in the same run.
+
+<Tip>
+When a question has an `ask_if`, list the question it names in `depends_on` as well, as the example does. The schedule is then explicit, and `decision.stages` shows the order you expect.
+</Tip>
+
+## Gating with `ask_if`
+
+`ask_if` maps a question id to the answer names that trigger this question:
+
+```json
+"ask_if": {"bucket": ["other"]}
+```
+
+The answer names you can list depend on the type of the question you name:
+
+| Named question | Legal answer names |
+| --- | --- |
+| `noul` | `yes`, `no` |
+| `choice` | its option names, the keys of its `criteria` |
+| `score` | its level names, the entries of its `criteria` |
+
+A question set is refused with `400 invalid_decision_questions` before anything is charged when:
+
+| Mistake | Reason in the message |
+| --- | --- |
+| An `ask_if` list names an answer the question cannot produce, such as `"true"` for a `noul` or a misspelt option | `an ask_if names an answer the question it depends on cannot produce` |
+| An `ask_if` list is empty | `an ask_if names no answers, so it can never be satisfied` |
+| An `ask_if` key is not another question in the set | `a question depends on a question that is not another question in this set` |
+
+Note that a `noul` answers `yes` and `no`, not `true` and `false`. The `true` and `false` keys belong only to a `noul` question's own `criteria`.
+
+## The skipped answer
+
+When an `ask_if` condition is not met, the question's answer is:
+
+```json
+{"type": "skipped", "because": {"question": "bucket", "answered": "billing", "required": ["other"]}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `because.question` | The question whose answer did not match. |
+| `because.answered` | The answer that question produced. **Absent** when that question was itself skipped. |
+| `because.required` | The answer names your `ask_if` listed. |
+
+Skips cascade. In the example, `sales_lead` was skipped, so `lead_value`, which asks only when `sales_lead` is `yes`, is skipped too, and its `because` has no `answered`: there was no answer to compare.
+
+### Handle skipped answers in code
+
+Every answer carries `type`, so check it before you read type-specific fields. A skipped answer has no `probability`, `choice` or `score`.
+
+<CodeGroup>
+
+```ts TypeScript
+type Answer =
+  | { type: "noul"; probability: number }
+  | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number }
+  | { type: "score"; score: number; legend: Record<string, string>; probabilities: Record<string, number>; confidence: number }
+  | { type: "skipped"; because: { question: string; answered?: string; required: string[] } };
+
+function describe(id: string, a: Answer): string {
+  switch (a.type) {
+    case "skipped":
+      return a.because.answered === undefined
+        ? `${id}: not asked, because ${a.because.question} was not asked either`
+        : `${id}: not asked, because ${a.because.question} was ${a.because.answered}, not ${a.because.required.join(" or ")}`;
+    case "noul":
+      return `${id}: P(yes) ${a.probability}`;
+    case "choice":
+      return `${id}: ${a.choice} (${a.confidence})`;
+    case "score":
+      return `${id}: ${a.score}`;
+  }
+}
+```
+
+```python Python
+def describe(qid: str, a: dict) -> str:
+    if a["type"] == "skipped":
+        b = a["because"]
+        if "answered" not in b:
+            return f"{qid}: not asked, because {b['question']} was not asked either"
+        return f"{qid}: not asked, because {b['question']} was {b['answered']}, not {' or '.join(b['required'])}"
+    if a["type"] == "noul":
+        return f"{qid}: P(yes) {a['probability']}"
+    if a["type"] == "choice":
+        return f"{qid}: {a['choice']} ({a['confidence']})"
+    return f"{qid}: {a['score']}"
+
+assert describe("sales_lead", {"type": "skipped", "because": {
+    "question": "bucket", "answered": "billing", "required": ["other"]}}) \
+    == "sales_lead: not asked, because bucket was billing, not other"
+assert describe("lead_value", {"type": "skipped", "because": {
+    "question": "sales_lead", "required": ["yes"]}}) \
+    == "lead_value: not asked, because sales_lead was not asked either"
+```
+
+</CodeGroup>
+
+## Reading a question `alone`
+
+By default, the questions in one stage are read jointly. Set `"alone": true` on a question to read it on its own rather than jointly with the rest of its stage.
+
+```json
+"tone": {"type": "score", "instructions": "how annoyed?",
+         "criteria": ["calm", "annoyed", "furious"], "alone": true}
+```
+
+## Limits that apply
+
+Conditional fields do not change the run's other limits:
+
+- 1 to 64 questions per run, skipped ones included.
+- The `instructions`, `questions`, `draws` and `think_tokens` together must fit in 32 KiB.
+- `question_order`, when you send it, must still name every question, including the ones that may be skipped.
+- The whole decision is one model call, whatever the number of stages.
+
+## Related
+
+- [Decision questions](/getting-started/decision-questions) - question types, stages and answer shapes in one place.
+- [Decision runs](/guides/decision-runs) - every request field, the full response and the costs.
+- [invalid_decision_questions](/problems/invalid_decision_questions) - every reason a question set is refused.
+- [Playground](/console/playground) - build a question set in the console and read the answers.
+- [Limits](/reference/limits) - every per-request limit in one table.

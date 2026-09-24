@@ -1,0 +1,129 @@
+---
+title: "Request ids"
+description: "How the x-request-id header works: send your own id or let OpenType mint one, read it on every response, and quote it when you report a problem."
+icon: "fingerprint"
+keywords: ["x-request-id", "request id", "request_id", "tracing", "correlation id", "support"]
+---
+
+Every response from the OpenType API carries an `x-request-id` header that names that one request. Use it to connect a line in your logs to the request that produced it, and quote it whenever you report a problem: it is the fastest way to find a specific request. This page is for anyone writing a client, a logging wrapper, or a bug report.
+
+## How the id is chosen
+
+| You send | The server uses |
+| --- | --- |
+| No `x-request-id` header | a new id: `req_` followed by 32 lowercase hex characters, for example `req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d` |
+| A value matching `^[A-Za-z0-9._-]{1,128}$` | your value, unchanged |
+| Any other value (empty, over 128 characters, spaces, `/`, `:`, non-ASCII) | a new `req_` id; your value is dropped without an error |
+
+Allowed characters are ASCII letters, digits, `.`, `_` and `-`, from 1 to 128 of them. A UUID such as `3f0c1a9b-2e4f-4a8c-8d1e-2f3a4b5c6d7e` is valid as it is.
+
+## Where the id appears
+
+- **The `x-request-id` response header, on every response.** Success, error, preflight, and refusals made before the body is read (such as an oversized body) all carry it.
+- **`error.request_id` in every JSON error body.** It is the same value as the header.
+
+```json
+{"error":{"code":"run_not_found","message":"the run was not found","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+- **Not in plain-text errors.** A few framework-level rejections on the keys, usage and billing routes have a text body instead of JSON: malformed JSON, a missing `Content-Type`, an unknown field. An unknown path gets an empty body. Their body has no `request_id`, but the `x-request-id` header is still there. Read it from the header. See [Errors](/reference/errors#plain-text-rejections).
+
+Browsers can read the header from JavaScript: it is the one response header the API exposes to cross-origin callers.
+
+## Send your own id
+
+Sending your own id lets you search your logs and ours with the same string, and ties an OpenType request to the job, ticket or trace that caused it.
+
+<CodeGroup>
+
+```bash cURL
+curl -sS -i https://api.opentype.dev/v1/runs/run_a4314b6cc08f4bd8814099a613abeb44 \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "x-request-id: triage-job-4822.attempt-1"
+# The response headers include: x-request-id: triage-job-4822.attempt-1
+```
+
+```ts TypeScript
+const requestId = `triage-job-4822.${crypto.randomUUID()}`; // letters, digits, . _ - only
+
+const res = await fetch(
+  "https://api.opentype.dev/v1/runs/run_a4314b6cc08f4bd8814099a613abeb44",
+  {
+    headers: {
+      Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+      "x-request-id": requestId,
+    },
+  },
+);
+
+// Always read the header: it is present even when the body is not JSON.
+const echoed = res.headers.get("x-request-id");
+if (!res.ok) {
+  const text = await res.text();
+  let code = `http_${res.status}`;
+  try { code = JSON.parse(text).error.code; } catch {}
+  console.error(`OpenType request ${echoed} failed: ${code}`);
+}
+```
+
+```python Python
+import os, uuid, requests
+
+request_id = f"triage-job-4822.{uuid.uuid4()}"  # letters, digits, . _ - only
+
+res = requests.get(
+    "https://api.opentype.dev/v1/runs/run_a4314b6cc08f4bd8814099a613abeb44",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "x-request-id": request_id,
+    },
+    timeout=30,
+)
+
+# Always read the header: it is present even when the body is not JSON.
+echoed = res.headers.get("x-request-id")
+if not res.ok:
+    try:
+        code = res.json()["error"]["code"]
+    except ValueError:
+        code = f"http_{res.status_code}"
+    print(f"OpenType request {echoed} failed: {code}")
+```
+
+</CodeGroup>
+
+### Choosing ids
+
+- **Make each attempt unique.** An id names one HTTP request. When you retry, send a new request id (for example with an attempt suffix), even when you keep the same `Idempotency-Key`.
+- **Do not confuse it with `Idempotency-Key`.** The request id is for tracing and changes nothing about how a request is processed. The `Idempotency-Key` on `POST /v1/runs` decides whether a request is a replay. See [Idempotency](/guides/idempotency).
+- **Keep secrets out of it.** The id is echoed in response headers and error bodies. Never put a key, a token, or personal data in one.
+
+## Quote it when you report a problem
+
+<Steps>
+  <Step title="Log it on every failure">
+    Log the `x-request-id` header next to the status and `error.code`. Log it from the failing attempt, not from a later retry: each attempt has its own id.
+  </Step>
+  <Step title="Collect the context">
+    Note the route, the time in UTC, the status, the `code`, and for runs the `run_id` if you have one.
+  </Step>
+  <Step title="Quote the id">
+    Include the request id in your report. One id identifies one request, which is what makes it findable.
+  </Step>
+</Steps>
+
+## What goes wrong
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The response id differs from the one you sent | your value broke the pattern: too long, or it contains a space, `/`, `:` or another character outside `A-Z a-z 0-9 . _ -` | shorten it or replace the characters |
+| `request_id` is missing from the body | the body is a plain-text framework rejection | read the `x-request-id` header instead |
+| Browser code cannot read the header | the request was blocked by CORS before a response arrived | call the API from your server |
+| Two log lines share one id | you reused a request id across retries | add an attempt number or a fresh UUID per attempt |
+
+## Related
+
+- [Errors](/reference/errors) - where `request_id` sits in the error envelope.
+- [Error handling](/guides/error-handling) - log, classify and retry failures.
+- [Idempotency](/guides/idempotency) - the header that does change how a run is processed.
+- [Conventions](/reference/conventions) - every other id format.

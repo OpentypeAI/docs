@@ -1,0 +1,89 @@
+---
+title: "key_not_found"
+description: "HTTP 404 on the key routes: no key with that id exists in your organization. Common causes and how to find the right key id."
+icon: "magnifying-glass"
+keywords: ["key_not_found", "404", "key id", "GET /v1/keys/{key_id}", "DELETE /v1/keys/{key_id}", "rotate", "organization"]
+---
+
+`key_not_found` means the key id is well formed, but no key with that id exists in the organization of your credential. Read this page if reading, revoking or rotating a key by id fails with a 404.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `404` | `key_not_found` | No. Check the id and the organization. |
+
+## What happened
+
+Routes:
+
+- `GET /v1/keys/{key_id}`
+- `DELETE /v1/keys/{key_id}`
+- `POST /v1/keys/{key_id}/rotate`
+
+Keys belong to one organization, and every lookup is limited to the organization of the credential. A key id from another organization is reported as not found.
+
+Common causes:
+
+- The calling key belongs to a different organization than the key you are looking for.
+- The id was mistyped or truncated.
+
+Revoked keys are not removed. They stay listed with `state: "revoked"`, so revoking a key does not cause this error. Revoking a key that is already revoked returns `200` with the original `revoked_at`.
+
+A path value that does not start with `key_` is refused earlier with [`malformed_key_id`](/problems/malformed_key_id), and a value starting with `otsk_` with [`secret_in_path`](/problems/secret_in_path).
+
+## How to fix
+
+1. List the keys the credential can see with `GET /v1/keys` and pick the `id` from there.
+2. Use a credential from the organization that owns the key.
+3. Store key ids as opaque strings and send them back unchanged.
+
+## Example
+
+```json
+{"error":{"code":"key_not_found","message":"no such key for this tenant","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Listing keys to find the right id. The call needs `keys_read`. Secrets are never returned here.
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  | jq '.keys[] | {id, name, secret_prefix, state}'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/keys", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+for (const key of body.keys) {
+  console.log(key.id, key.name, key.secret_prefix, key.state); // newest first, revoked included
+}
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.get(
+    "https://api.opentype.dev/v1/keys",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+for key in body["keys"]:
+    print(key["id"], key["name"], key["secret_prefix"], key["state"])  # newest first, revoked included
+```
+</CodeGroup>
+
+## Related
+
+- [API keys in the console](/console/api-keys) - every key in your organization, with its id and state.
+- [Key rotation](/guides/key-rotation) - rotate or replace a key by id.
+- [malformed_key_id](/problems/malformed_key_id) - the path value is not a key id.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

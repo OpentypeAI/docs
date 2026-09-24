@@ -1,0 +1,51 @@
+---
+title: "Changelog"
+description: "Dated changes to the OpenType API contract and account features, with links to the pages that explain each one."
+icon: "clock-rotate-left"
+keywords: ["changelog", "release notes", "api changes", "what is new", "neon 1.1"]
+---
+
+This page records changes to the OpenType API contract and to what an account can do, newest first. Read it when you upgrade a client or when a response differs from what you remember. Each entry links to the page that explains the change in full.
+
+<Update label="2026-09-24" description="Open sign-up, billing, daily usage, and Neon 1.1">
+
+### Accounts and billing
+
+- **Open sign-up.** Anyone can create an account in the [console](https://console.opentype.dev). Verifying your email adds $5 of free credit, once per email address. See [Create an account](/getting-started/create-an-account).
+- **Billing routes.** `GET /v1/billing` returns your balance, auto-recharge settings and the last 50 transactions. `POST /v1/billing/checkout` returns a Stripe checkout page for a purchase from $5 to $1,000. `POST /v1/billing/portal` opens the Stripe billing portal for saved cards and receipts. `PUT /v1/billing/auto-recharge` tops your balance up when it falls below a threshold. See [Credits and billing](/guides/credits-and-billing) and [Auto-recharge](/guides/auto-recharge).
+- **`billing_read` scope.** Reading billing needs `billing_read`; buying credits and changing auto-recharge need `billing_write`. See [Scopes](/reference/scopes).
+- **`402 insufficient_credits`.** `POST /v1/runs` refuses a run the balance cannot cover. Nothing is stored, so the same `Idempotency-Key` works once you add credits. See [Handling insufficient credits](/guides/handling-insufficient-credits).
+
+### Usage
+
+- **`GET /v1/usage/daily`.** One row per UTC day with runs, input and output tokens, and spend, zero-filled for quiet days, over a window of up to 92 days. See [Usage reporting](/guides/usage-reporting).
+
+### Models
+
+- **Neon 1.1.** Decision runs are served by Neon 1.1, with the API ids `neon-1.1` and `neon-latest`. See [Models and pricing](/getting-started/models-and-pricing).
+- **Optional `model` field on decision runs.** A decision run may name its model: `"model": "neon-1.1"` or `"model": "neon-latest"`. Any other value is refused with [`400 unknown_model`](/problems/unknown_model).
+- **Model reported in responses.** A live decision response reports `decision.model` as `neon-1.1`. Usage ledger rows report `model_id` `neon-1.1` and `provider` `opentype`.
+
+### Requests
+
+- **`x-request-id` on every response.** Send your own id to have it echoed, or read the one the server mints. It also appears as `error.request_id`. See [Request ids](/reference/request-ids).
+- **1 MiB body cap on every route.** See [Limits](/reference/limits).
+- **Decision alternatives capped at 20 per question**, down from 26. A question with more is refused with `400 invalid_decision_questions`.
+
+</Update>
+
+<Update label="v0.1.0" description="Initial contract">
+
+- `POST /v1/runs` with two kinds: `decision` (`noul`, `choice` and `score` questions, with `depends_on`, `ask_if`, `alone`, `draws` and `think_tokens`) and `verdict` (a JSON Schema, with the answer validated against it).
+- `GET /v1/runs`, `GET /v1/runs/{run_id}`, and `GET /v1/runs/{run_id}/stream`, which returns a one-time snapshot of the stored run as server-sent events.
+- API keys (`otsk_...`) with scopes, rotation, and idempotent revocation.
+- Usage totals, the per-call ledger, per-run usage, and quota: `GET /v1/usage`, `GET /v1/usage/ledger`, `GET /v1/usage/runs/{run_id}`, `GET /v1/quota`.
+
+</Update>
+
+## Related
+
+- [API reference](/api-reference/introduction) - the current contract, route by route.
+- [Conventions](/reference/conventions) - the rules every route follows.
+- [Models and pricing](/getting-started/models-and-pricing) - Neon 1.1 and what it costs.
+- [Credits and billing](/guides/credits-and-billing) - how credits, holds and purchases work.

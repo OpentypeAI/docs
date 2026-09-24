@@ -1,0 +1,113 @@
+---
+title: "database_unavailable"
+description: "HTTP 503: the data store could not be reached or returned a record it could not read. Retry with backoff; on POST /v1/runs check replays."
+icon: "database"
+keywords: ["database_unavailable", "503", "data store", "service unavailable", "retry", "backoff"]
+---
+
+`database_unavailable` means the service could not reach its data store, or read a record from it, while handling your request. Read this page when any route answers with this code.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `database_unavailable` | Yes, with backoff. |
+
+## What happened
+
+Routes: the runs routes (`/v1/runs*`), the keys routes (`/v1/keys*`), the usage routes (`/v1/usage*` and `/v1/quota`), and the billing routes (`/v1/billing*`).
+
+The data store failed while serving the request: the connection failed, or a stored record could not be read. Nothing in your request causes this.
+
+On `POST /v1/runs` the data store is used before the run is admitted and again while it runs, so the run may or may not have been stored.
+
+## How to fix
+
+- Retry with backoff (for example 2, 4, 8 and 16 seconds). Log the `request_id` of every failed attempt.
+- **`POST /v1/runs`:** retry with the **same** `Idempotency-Key` first. If the run was stored and finished, you get it back with `"replayed": true` and are not charged twice. If you get `202` with `"state": "pending"`, the run was stored but never ran; retry again with a **new** key.
+- **`POST /v1/keys` and `POST /v1/keys/{key_id}/rotate`:** list keys with `GET /v1/keys` before you retry, so you do not create or rotate twice.
+- **`POST /v1/billing/checkout`:** retrying is safe; you only pay on the checkout page it returns.
+- If it persists for several minutes, report a `request_id`.
+
+## Example
+
+```json
+{"error":{"code":"database_unavailable","message":"the durable store is not available","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Retrying a read with backoff and your own request id:
+
+<CodeGroup>
+```bash curl
+for attempt in 1 2 3 4; do
+  STATUS=$(curl -sS -o response.json -w '%{http_code}' "https://api.opentype.dev/v1/keys" \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "x-request-id: $(uuidgen)")
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # back off, then try again
+    *) break ;;
+  esac
+done
+cat response.json
+```
+
+```typescript TypeScript
+async function getWithRetry(path: string, maxAttempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    const requestId = crypto.randomUUID();
+    const res = await fetch(`https://api.opentype.dev${path}`, {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "x-request-id": requestId, // log it; quote it if the problem persists
+      },
+    });
+    if (res.ok) return res.json();
+
+    const code = (await res.json().catch(() => null))?.error?.code ?? `HTTP ${res.status}`;
+    console.error(`GET ${path} -> ${res.status} ${code} (${requestId})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${requestId})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const data = await getWithRetry("/v1/keys"); // needs keys_read
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+def get_with_retry(path: str, max_attempts: int = 4) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        request_id = str(uuid.uuid4())
+        resp = requests.get(
+            f"https://api.opentype.dev{path}",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                "x-request-id": request_id,  # log it; quote it if the problem persists
+            },
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()
+
+        try:
+            code = resp.json()["error"]["code"]
+        except ValueError:
+            code = f"HTTP {resp.status_code}"
+        print(f"GET {path} -> {resp.status_code} {code} ({request_id})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{code} ({request_id})")
+        time.sleep(2 ** attempt)
+
+data = get_with_retry("/v1/keys")  # needs keys_read
+```
+</CodeGroup>
+
+## Related
+
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Idempotency](/guides/idempotency) - when to reuse an `Idempotency-Key` and when to send a new one.
+- [Request ids](/reference/request-ids) - send your own `x-request-id` and quote it when you report a problem.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

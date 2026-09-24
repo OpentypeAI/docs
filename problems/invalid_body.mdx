@@ -1,0 +1,178 @@
+---
+title: "invalid_body"
+description: "HTTP 400 on the runs routes: the body or query string does not fit the contract. Every message, what causes it, and how to fix it."
+icon: "file-circle-exclamation"
+keywords: ["invalid_body", "400", "bad request", "request body", "unknown field", "content-type", "POST /v1/runs", "GET /v1/runs"]
+---
+
+`invalid_body` means OpenType could not accept the body of a `POST /v1/runs` request, or the query string of a `GET /v1/runs` request. Read this page when a run is refused with a 400 and you need to know which field to change.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `400` | `invalid_body` | No. Fix the request first. |
+
+## What happened
+
+The request does not fit the runs contract. It was refused before a run existed, so nothing was stored and nothing was charged.
+
+Routes:
+
+- `POST /v1/runs`: the JSON body.
+- `GET /v1/runs`: the `limit` and `offset` query parameters.
+
+Every message starts with `the request body is not valid: ` and ends with one of the reasons below. Branch on `code`, and log `message` for the person who fixes the request.
+
+### Reading the request
+
+| Reason | Cause |
+| --- | --- |
+| `the body does not match the schema` | An unknown field, a wrong type, or a missing required field. Run bodies refuse every field the contract does not list, and each entry of `messages` accepts only `role` (`"user"` or `"assistant"`) and `content` (a string). |
+| `the body is not valid JSON` | The body does not parse as JSON. |
+| `the Content-Type must be application/json` | The `Content-Type` header is missing or has another value. |
+| `the body could not be read` | The server could not read the body to its end. |
+| `limit and offset must be whole numbers, and no other parameter is accepted` | `GET /v1/runs` received a non-integer `limit` or `offset`, or another query parameter. |
+| `the query string could not be read` | `GET /v1/runs` received a query string it cannot parse. |
+
+### Prompt and contract
+
+| Reason | Cause |
+| --- | --- |
+| `max_output_tokens must be greater than zero` | `max_output_tokens` is `0`. It is required on every run. |
+| `messages must not be empty` | A verdict run sent `"messages": []`. |
+| `state is required for a decision run` | `"kind": "decision"` without `state`. |
+| `schema is required for a verdict run` | A verdict run without `schema`. A body with no `kind` is a verdict run. |
+| `questions is required for a decision run` | `"kind": "decision"` without `questions`. |
+| `question_order must name exactly the keys of questions` | `question_order` lists an id that is not in `questions`, or leaves one out. |
+
+### A field sent on the wrong kind
+
+| Reason | Cause |
+| --- | --- |
+| `state is only valid on a decision run` | Also sent for `questions`, `instructions`, `draws`, `think_tokens` and `question_order`, with that field's name. The most common cause is a decision body with no `kind`: `kind` defaults to `"verdict"`. |
+| `system is only valid on a verdict run; use instructions` | A decision run sent `system`. Put set-level context in `instructions`. |
+| `messages is only valid on a verdict run; use state` | A decision run sent `messages`. Put the input in `state`. |
+| `schema is only valid on a verdict run; use questions` | A decision run sent `schema`. Describe the answers with `questions`. |
+
+<Note>
+On `POST /v1/runs` the credential is checked first, so a request with a bad key and a bad body gets a 401. The reasons under "Reading the request" are checked next, before the `runs_write` scope and the `Idempotency-Key` header. The prompt, contract and wrong-kind reasons are checked after them.
+</Note>
+
+## How to fix
+
+1. Take the reason after the prefix and find it in the tables above.
+2. If a decision run fails with `... is only valid on a decision run`, add `"kind": "decision"`.
+3. Send `Content-Type: application/json`. Python `requests` sets it for you when you pass `json=`.
+4. Remove any field the contract does not list, and check the spelling of the ones it does.
+5. Send the corrected request. The first attempt was refused before a run existed, so you may keep the same `Idempotency-Key`.
+
+Which fields each kind accepts:
+
+| Field | Verdict run | Decision run |
+| --- | --- | --- |
+| `kind` | `"verdict"`, the default | `"decision"`, required |
+| `system` | optional | refused |
+| `messages` | required, not empty | refused |
+| `schema` | required | refused |
+| `state` | refused | required, any JSON value |
+| `instructions` | refused | optional |
+| `questions` | refused | required |
+| `question_order` | refused | optional |
+| `draws` | refused | optional, 1 to 8 |
+| `think_tokens` | refused | optional, 0 to 4096 |
+| `capability_hint` | optional | optional |
+| `max_output_tokens` | required, greater than 0 | required, greater than 0 |
+| `deadline_ms` | optional | optional |
+
+Decision runs also accept an optional `model`, either `neon-1.1` or `neon-latest`. Any other value is refused with [`unknown_model`](/problems/unknown_model), not with `invalid_body`.
+
+## Example
+
+```json
+{"error":{"code":"invalid_body","message":"the request body is not valid: messages must not be empty","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+A decision run that passes these checks:
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-triage" \
+  -d '{
+    "kind": "decision",
+    "instructions": "You triage customer support tickets.",
+    "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+    "questions": {
+      "urgent": {"type": "noul", "instructions": "reply within the hour?"}
+    },
+    "max_output_tokens": 16
+  }'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4822-triage",
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    instructions: "You triage customer support tickets.",
+    state: { ticket: "I was charged twice this month and nobody answers my emails.", plan: "pro" },
+    questions: {
+      urgent: { type: "noul", instructions: "reply within the hour?" },
+    },
+    max_output_tokens: 16,
+  }),
+});
+
+const body = await res.json();
+if (!res.ok) {
+  // For invalid_body, the reason follows "the request body is not valid: ".
+  throw new Error(`${body.error.code}: ${body.error.message} (${body.error.request_id})`);
+}
+console.log(body.decision.answers.urgent.probability);
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "ticket-4822-triage",
+    },
+    json={
+        "kind": "decision",
+        "instructions": "You triage customer support tickets.",
+        "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+        "questions": {
+            "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+        },
+        "max_output_tokens": 16,
+    },
+    timeout=60,
+)
+
+body = resp.json()
+if not resp.ok:
+    err = body["error"]
+    # For invalid_body, the reason follows "the request body is not valid: ".
+    raise RuntimeError(f"{err['code']}: {err['message']} ({err['request_id']})")
+print(body["decision"]["answers"]["urgent"]["probability"])
+```
+</CodeGroup>
+
+## Related
+
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.
+- [Errors](/reference/errors) - the error envelope and why you branch on `code`, not `message`.
+- [Decision runs](/guides/decision-runs) - the full decision body, field by field.
+- [Verdict runs](/guides/verdict-runs) - the verdict body and its schema.
+- [Error handling](/guides/error-handling) - a retry policy that never resends a 400 unchanged.

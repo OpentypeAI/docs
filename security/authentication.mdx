@@ -1,0 +1,162 @@
+---
+title: "Authentication"
+description: "Send an API key as a bearer credential, tell keys from console sessions, and fix every 401, 403 and 503 an auth check can return."
+icon: "key"
+keywords: ["authentication", "bearer", "authorization header", "api key", "otsk_", "401", "invalid_credential", "missing_credentials", "scope_denied"]
+---
+
+This page is for anyone wiring an OpenType API key into code, and for anyone debugging a request that came back `401`, `403` or an auth-related `503`. It covers the one header every protected route reads, the two kinds of credential that header can carry, how a key is checked, and each auth error with its fix.
+
+## The header
+
+Every protected `/v1` route takes one header:
+
+```http
+Authorization: Bearer otsk_...
+```
+
+- The scheme name is compared case-insensitively, so `Bearer`, `bearer` and `BEARER` all work.
+- The scheme and the credential are split on the first whitespace, and the credential is trimmed.
+- An empty credential counts as no credential.
+- There is no other auth header and no cookie auth.
+
+## Two kinds of credential
+
+The server decides what a credential is from its prefix.
+
+| Credential | Looks like | Who uses it | Lifetime |
+| --- | --- | --- | --- |
+| API key | `otsk_` followed by 64 lowercase hex characters, 69 characters in total | Your servers, scripts and CI jobs | Until you revoke it. Keys do not expire. |
+| Console session | Anything that does not start with `otsk_` | The [console](/console/index), after you sign in | Expires. It is for the console only, never for your code. |
+
+Your code uses API keys. The console holds its own session when you sign in, and you never need to copy a session into code. Create keys in the console under [API keys](/console/api-keys) or with `POST /v1/keys`.
+
+<Note>
+A key id such as `key_d12af855ae0f45b9925223d65562fd0e` and a display prefix such as `otsk_fde66231` are not credentials. Only the full 69-character secret authenticates.
+</Note>
+
+## Send an authenticated request
+
+Keep the secret in an environment variable, never in source code. This call lists your most recent run and needs a key with `runs_read`, which the console's **Send requests** set includes. It is a quick way to confirm a new key works.
+
+<CodeGroup>
+
+```bash curl
+curl -sS "https://api.opentype.dev/v1/runs?limit=1" \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs?limit=1", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+
+if (!res.ok) {
+  const { error } = await res.json();
+  // Branch on error.code, and log error.request_id.
+  throw new Error(`${res.status} ${error.code}: ${error.message} (${error.request_id})`);
+}
+
+const { runs } = await res.json();
+console.log(runs);
+```
+
+```python Python
+import os
+import requests
+
+res = requests.get(
+    "https://api.opentype.dev/v1/runs",
+    params={"limit": 1},
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+
+if not res.ok:
+    error = res.json()["error"]
+    # Branch on error["code"], and log error["request_id"].
+    raise RuntimeError(f"{res.status_code} {error['code']}: {error['message']} ({error['request_id']})")
+
+print(res.json()["runs"])
+```
+
+</CodeGroup>
+
+A working key returns `200`:
+
+```json
+{
+  "runs": [
+    {
+      "run_id": "run_a4314b6cc08f4bd8814099a613abeb44",
+      "kind": "decision",
+      "state": "completed",
+      "input_digest": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+      "output_digest": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+      "replayed": true
+    }
+  ],
+  "limit": 1,
+  "offset": 0
+}
+```
+
+An organization with no runs yet gets `"runs": []`, which still proves the key works.
+
+## How a key is checked
+
+For a credential that starts with `otsk_`, the server runs these steps in order:
+
+1. **Shape.** Anything other than `otsk_` followed by exactly 64 hex characters is refused with `401 invalid_credential` before any lookup.
+2. **Lookup.** The server computes the SHA-256 of the secret and looks for an active key with that digest. It never stores or compares the plaintext.
+3. **State.** A revoked key does not match, so it gets the same `401 invalid_credential` as an unknown key. It does not get `key_revoked`, which only appears when you try to rotate a revoked key.
+4. **Identity.** A verified key acts in the organization it was created in, with exactly the scopes it was created with. See [Scopes and roles](/security/scopes-and-roles).
+
+After authentication, each route checks its own scope and answers `403 scope_denied` when the credential lacks it.
+
+## Auth errors
+
+Every auth error uses the standard JSON envelope. Branch on `error.code`, and quote `error.request_id` when you report a problem. Responses carry no `WWW-Authenticate` header.
+
+| Status | Code | Message | What causes it | What to do |
+| --- | --- | --- | --- | --- |
+| 401 | [`missing_credentials`](/problems/missing_credentials) | `a bearer credential is required` | No `Authorization` header, a scheme other than `Bearer`, or an empty credential | Send `Authorization: Bearer <key>` |
+| 401 | [`invalid_credential`](/problems/invalid_credential) | `the credential was rejected` | A key with the wrong shape, an unknown key, a revoked key, or an expired or invalid console session | Check the key; create a new one if it was revoked. Do not retry unchanged. |
+| 403 | [`no_active_organization`](/problems/no_active_organization) | `the session has no active organization` | A console session that names no organization. API keys always carry their organization, so a key never gets this. | Sign in to the console again |
+| 403 | [`scope_denied`](/problems/scope_denied) | `the session lacks the runs_write scope` | The credential is valid but lacks the scope the route needs. The message names the scope. | Use a key that holds that scope, or create one |
+| 503 | [`auth_not_configured`](/problems/auth_not_configured) | `the identity provider is not configured` | OpenType cannot verify this kind of credential right now | Retry with backoff. This is not a problem with your credential. |
+| 503 | [`trust_keys_unavailable`](/problems/trust_keys_unavailable) | `the trust keys are unavailable` | OpenType could not reach what it needs to verify the credential | Retry with backoff. This is not a problem with your credential. |
+
+The `scope_denied` message says "session" even when the credential is an API key. The code is what matters.
+
+```text
+{"error":{"code":"missing_credentials","message":"a bearer credential is required","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+{"error":{"code":"invalid_credential","message":"the credential was rejected","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+{"error":{"code":"scope_denied","message":"the session lacks the runs_write scope","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+{"error":{"code":"trust_keys_unavailable","message":"the trust keys are unavailable","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+### Retry rules
+
+- `401` and `403`: something about the credential must change. Retrying the same request returns the same error.
+- `503` `auth_not_configured` and `trust_keys_unavailable`: retry with exponential backoff and jitter. Do not revoke or replace the key because of these.
+- Treat a `401` as a signal to alert a person, not to loop. A key that suddenly returns `invalid_credential` was usually revoked or rotated by someone in your organization.
+
+## Common mistakes
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| `401 missing_credentials` although you set the header | The header value is `otsk_...` with no `Bearer ` in front, or the variable is empty in this process | Send `Bearer <key>`, and check that `OPENTYPE_API_KEY` is set where the code runs |
+| `401 invalid_credential` on a brand-new key | You copied the 13-character prefix from the key list, not the full secret | The secret is shown once. If you did not copy it, revoke the key and create another. |
+| `401 invalid_credential` after it worked before | The key was revoked, or rotated so the old secret stopped working | Get the current secret from your secret store, or create a new key |
+| `401 invalid_credential` with a secret you are sure of | The secret was altered when it was copied: a character cut off, whitespace inside it, or its case changed | Send the secret exactly as issued: `otsk_` plus 64 lowercase hex |
+| `403 scope_denied` on `POST /v1/runs` | The key was created with read-only scopes | Create a key with `runs_write`. Scopes cannot be added to an existing key. |
+| `400 secret_in_path` on a key route | The secret was put where the `key_` id belongs | [Rotate that key now](/security/api-key-security#if-a-secret-leaks), then use the `key_` id |
+
+## Related
+
+- [API key security](/security/api-key-security) - how secrets are stored, shown once, revoked and rotated.
+- [Scopes and roles](/security/scopes-and-roles) - pick the smallest set of scopes a key needs.
+- [invalid_credential](/problems/invalid_credential) - the full entry for the most common 401.
+- [Error handling](/guides/error-handling) - retry logic that treats 401, 403 and 503 differently.
+- [Request ids](/reference/request-ids) - what to quote when you report an auth failure.

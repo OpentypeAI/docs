@@ -1,0 +1,253 @@
+---
+title: "Pagination and time windows"
+sidebarTitle: "Pagination"
+description: "Page through GET /v1/runs with limit and offset, and walk the usage ledger with start_at and end_at windows. Limits, order, and the traps."
+icon: "list-ol"
+keywords: ["pagination", "limit", "offset", "GET /v1/runs", "usage ledger", "start_at", "end_at", "time window", "list runs"]
+---
+
+Two list routes return more rows than fit in one response: the run list and the usage ledger. They page differently. The run list takes `limit` and `offset`; the ledger has no offset, so you move through it by narrowing a time window. Read this page before you export runs or reconcile spend.
+
+## At a glance
+
+| Route | Scope | Paging | `limit` default | `limit` range | Order |
+| --- | --- | --- | --- | --- | --- |
+| `GET /v1/runs` | `runs_read` | `limit` + `offset` | 20 | clamped to 1-100 | newest first |
+| `GET /v1/usage/ledger` | `usage_read` | `start_at` + `end_at` window, no offset | 50 | 1-200; above 200 is clamped to 200 | newest first |
+| `GET /v1/usage/daily` | `usage_read` | window of at most 92 days | none | none | oldest first, one row per UTC day |
+| `GET /v1/keys` | `keys_read` | none: returns every key | none | none | newest first |
+| `GET /v1/billing` | `billing_read` | none: the last 50 transactions | fixed | fixed | newest first |
+
+No route returns a cursor or a total count.
+
+## Runs: limit and offset
+
+| Query parameter | Type | Default | Rule |
+| --- | --- | --- | --- |
+| `limit` | integer | 20 | Clamped to 1-100: `0` becomes 1 and `500` becomes 100. |
+| `offset` | integer | 0 | Rows to skip from the newest. |
+
+Any other parameter, or a value that is not a whole number, is refused with [`400 invalid_body`](/problems/invalid_body): "limit and offset must be whole numbers, and no other parameter is accepted". There is no filter by state, kind or date.
+
+The response echoes the `limit` that was applied, after clamping, and the `offset`:
+
+```json
+{
+  "runs": [
+    {
+      "run_id": "run_a4314b6cc08f4bd8814099a613abeb44",
+      "kind": "decision",
+      "state": "completed",
+      "input_digest": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+      "output_digest": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+      "replayed": true
+    }
+  ],
+  "limit": 20,
+  "offset": 0
+}
+```
+
+A row is the stored run **without** its answer, `usage` or cost. `replayed` is always `true`, because the row comes from storage. To get the answer of a row, read it with [`GET /v1/runs/{run_id}`](/guides/polling). For tokens and spend, use the ledger or `GET /v1/usage/runs/{run_id}`.
+
+### Walk every run
+
+Stop when a page returns fewer rows than `limit`. Rows are ordered newest first, so a run created while you page pushes older rows one position further: the next page can repeat a row you already have. Deduplicate by `run_id`.
+
+<CodeGroup>
+
+```bash cURL
+# Second page of 100
+curl -sS "https://api.opentype.dev/v1/runs?limit=100&offset=100" \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+async function allRuns() {
+  const seen = new Map<string, any>();
+  const limit = 100;
+  for (let offset = 0; ; offset += limit) {
+    const res = await fetch(`https://api.opentype.dev/v1/runs?limit=${limit}&offset=${offset}`, {
+      headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(`${res.status} ${body.error.code} (${body.error.request_id})`);
+    for (const run of body.runs) seen.set(run.run_id, run); // new runs shift pages: dedupe
+    if (body.runs.length < body.limit) return [...seen.values()];
+  }
+}
+```
+
+```python Python
+import os
+import requests
+
+def all_runs() -> list[dict]:
+    seen: dict[str, dict] = {}
+    limit, offset = 100, 0
+    while True:
+        res = requests.get(
+            "https://api.opentype.dev/v1/runs",
+            params={"limit": limit, "offset": offset},
+            headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+            timeout=30,
+        )
+        body = res.json()
+        if not res.ok:
+            raise RuntimeError(f"{res.status_code} {body['error']['code']} ({body['error']['request_id']})")
+        for run in body["runs"]:
+            seen[run["run_id"]] = run  # new runs shift pages: dedupe
+        if len(body["runs"]) < body["limit"]:
+            return list(seen.values())
+        offset += limit
+```
+
+</CodeGroup>
+
+## The ledger: time windows
+
+The ledger has one entry per model call, newest first. It takes a window and a `limit`, and has no offset:
+
+| Query parameter | Type | Default | Rule |
+| --- | --- | --- | --- |
+| `start_at` | timestamp | start of the current UTC month | Must be sent together with `end_at`. |
+| `end_at` | timestamp | start of next UTC month | Must be sent together with `start_at`, and be after it. |
+| `limit` | integer | 50 | At least 1; values above 200 are clamped to 200. |
+
+```json
+{
+  "organization_id": "org_example",
+  "window": {"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
+  "limit": 50,
+  "entries": [
+    {
+      "run_id": "run_a4314b6c-c08f-4bd8-8140-99a613abeb44",
+      "retry_ordinal": 0,
+      "provider": "opentype",
+      "model_id": "neon-1.1",
+      "provider_request_id": null,
+      "status": "succeeded",
+      "tokens": {"input_tokens": 412, "output_tokens": 23, "total_tokens": 435},
+      "cost_micros": 19,
+      "created_at": "2026-09-24T10:12:03Z"
+    }
+  ]
+}
+```
+
+The ledger writes `run_id` in the hyphenated form. Both forms name the same run and are accepted by every route. Normalize them before you join ledger entries to run-list rows: remove the hyphens.
+
+### Window rules
+
+- **Format:** exactly `YYYY-MM-DDTHH:MM:SSZ`: UTC, second precision, a `Z` suffix, no fractional seconds and no offset. `2026-09-01T00:00:00Z` is accepted; `2026-09-01`, `2026-09-01T00:00:00.000Z` and `2026-09-01T02:00:00+02:00` are not.
+- **Both or neither.** Sending one alone is refused. Sending neither means the current quota period, the current UTC calendar month.
+- **Half-open:** `[start_at, end_at)`. An entry created at exactly `end_at` is not included, so consecutive windows such as `[09-01, 09-02)` and `[09-02, 09-03)` never overlap.
+- **Filtered by the call's time.** The ledger filters on when each model call was recorded. The usage totals and the daily series filter on when the run was created, so a run that straddles a boundary can land on different sides.
+
+### Walk a window larger than 200 entries
+
+A window returns at most 200 entries, the newest ones. To reach older entries, keep `start_at` and move `end_at` down to the oldest `created_at` you received, then repeat.
+
+Timestamps have one-second precision, so several entries can share the oldest second, and some of them may not have fit in the page. Set the next `end_at` to **one second after** the oldest `created_at`, then drop the entries you already have, keyed by `run_id` and `retry_ordinal`. Stop when a page brings nothing new.
+
+<CodeGroup>
+
+```bash cURL
+curl -sS -G https://api.opentype.dev/v1/usage/ledger \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  --data-urlencode "start_at=2026-09-01T00:00:00Z" \
+  --data-urlencode "end_at=2026-09-24T10:12:04Z" \
+  --data-urlencode "limit=200"
+```
+
+```ts TypeScript
+const iso = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z"); // YYYY-MM-DDTHH:MM:SSZ
+
+async function ledger(startAt: string, endAt: string) {
+  const seen = new Map<string, any>();
+  let end = endAt;
+  for (;;) {
+    const url = new URL("https://api.opentype.dev/v1/usage/ledger");
+    url.search = new URLSearchParams({ start_at: startAt, end_at: end, limit: "200" }).toString();
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` } });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    const { entries } = await res.json();
+    let added = 0;
+    for (const e of entries) {
+      const key = `${e.run_id}/${e.retry_ordinal}`;
+      if (!seen.has(key)) (seen.set(key, e), added++);
+    }
+    if (entries.length < 200 || added === 0) return [...seen.values()];
+    // One second past the oldest entry, so entries sharing that second are not skipped.
+    const oldest = new Date(entries[entries.length - 1].created_at);
+    end = iso(new Date(oldest.getTime() + 1000));
+  }
+}
+
+await ledger("2026-09-01T00:00:00Z", "2026-10-01T00:00:00Z");
+```
+
+```python Python
+import os
+from datetime import datetime, timedelta
+
+import requests
+
+FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+def ledger(start_at: str, end_at: str) -> list[dict]:
+    seen: dict[tuple[str, int], dict] = {}
+    end = end_at
+    while True:
+        res = requests.get(
+            "https://api.opentype.dev/v1/usage/ledger",
+            params={"start_at": start_at, "end_at": end, "limit": 200},
+            headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+            timeout=30,
+        )
+        if not res.ok:
+            raise RuntimeError(f"{res.status_code} {res.text}")
+        entries = res.json()["entries"]
+        added = 0
+        for e in entries:
+            key = (e["run_id"], e["retry_ordinal"])
+            if key not in seen:
+                seen[key] = e
+                added += 1
+        if len(entries) < 200 or added == 0:
+            return list(seen.values())
+        # One second past the oldest entry, so entries sharing that second are not skipped.
+        oldest = datetime.strptime(entries[-1]["created_at"], FMT)
+        end = (oldest + timedelta(seconds=1)).strftime(FMT)
+
+ledger("2026-09-01T00:00:00Z", "2026-10-01T00:00:00Z")
+```
+
+</CodeGroup>
+
+If more than 200 entries share a single second, this loop cannot get past them. For large exports, walk the period one day at a time instead: send `[day, next day)` windows, and split a day further if it returns 200 entries.
+
+For totals rather than individual entries, `GET /v1/usage` and `GET /v1/usage/daily` sum the window for you. See [Usage reporting](/guides/usage-reporting).
+
+## Errors
+
+| Route | Status | Code or body | Cause |
+| --- | --- | --- | --- |
+| `GET /v1/runs` | `400` | [`invalid_body`](/problems/invalid_body) | A parameter other than `limit` and `offset`, or a value that is not a whole number |
+| usage routes | `400` | [`invalid_parameter`](/problems/invalid_parameter): "start_at and end_at must be supplied together" | Only one bound sent |
+| usage routes | `400` | [`invalid_parameter`](/problems/invalid_parameter): "start_at must be an RFC 3339 UTC timestamp such as 2026-02-01T00:00:00Z" (or `end_at`) | Wrong format, or not a real calendar date |
+| usage routes | `400` | [`invalid_parameter`](/problems/invalid_parameter): "start_at must be before end_at" | Empty or reversed window |
+| `GET /v1/usage/ledger` | `400` | [`invalid_parameter`](/problems/invalid_parameter): "limit must be at least 1" | `limit=0` |
+| `GET /v1/usage/daily` | `400` | [`invalid_parameter`](/problems/invalid_parameter): "the window must span at most 92 days" | Window longer than 92 days |
+| usage routes | `400` | plain text beginning `Failed to deserialize query string` | An unknown parameter such as `offset`, or a `limit` that is not a number |
+| any | `403` | [`scope_denied`](/problems/scope_denied) | The key lacks `runs_read` or `usage_read` |
+
+The plain-text `400` has no JSON body. Parse errors defensively, as in [Error handling](/guides/error-handling).
+
+## Related
+
+- [Usage reporting](/guides/usage-reporting) - totals, the daily series and per-run spend over the same windows.
+- [Polling](/guides/polling) - read one run's answer after you find it in the list.
+- [invalid_parameter](/problems/invalid_parameter) - every window and limit refusal, with fixes.
+- [Conventions](/reference/conventions) - timestamp, id and money formats across the API.
+- [API reference](/api-reference/introduction) - the list and ledger schemas.

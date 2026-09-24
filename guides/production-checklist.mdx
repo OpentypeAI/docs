@@ -1,0 +1,173 @@
+---
+title: "Production checklist"
+description: "What to settle before OpenType runs carry real traffic: keys and scopes, idempotency, timeouts, error handling, credit, quota and a rotation plan."
+icon: "list-check"
+keywords: ["production", "go live", "checklist", "launch", "best practices", "readiness"]
+---
+
+Use this page before you point real traffic at OpenType, and again when you review an integration. Each item says what to do, why it matters, and where the details are. The code in [Code examples](/guides/code-examples) implements most of it.
+
+## Keys and secrets
+
+- [ ] **One key per environment and per service.** Development, staging and production each get their own key, named after the process that holds it. Rotating or revoking one then touches nothing else. See [Key rotation](/guides/key-rotation#plan-it).
+- [ ] **The smallest scope set on each key.** A service that sends runs needs `runs_write` and `runs_read`. A dashboard needs `usage_read` and `billing_read`. Only the tool that manages keys needs `keys_read` and `keys_write`. Scopes are fixed when a key is created. See [Scopes and roles](/security/scopes-and-roles).
+- [ ] **The secret lives in a secret store**, not in source code, container images, build logs or client-side code. Load it into `OPENTYPE_API_KEY` at runtime. The secret is shown once, at creation or rotation, and cannot be recovered. See [API key security](/security/api-key-security).
+- [ ] **Calls come from your servers, not from browsers or mobile apps.** Anyone who can read a secret can spend your credit.
+- [ ] **A key id, never a secret, goes in a URL.** A secret in a key route's path is refused with `400 secret_in_path`; treat that secret as leaked and rotate it.
+- [ ] **A rotation plan exists.** Keys never expire. Decide how often you rotate, who does it, and how you roll out a new secret without downtime. See [Key rotation](/guides/key-rotation).
+
+## Requests
+
+- [ ] **Every `POST /v1/runs` carries an `Idempotency-Key` derived from your business id**, such as `ticket-4822-triage`, not a random value per attempt. A key is 1 to 255 bytes of visible header text, unique per organization, and never expires. See [Idempotency](/guides/idempotency).
+- [ ] **A changed body gets a new key.** Reusing a key with a different body is refused with `409 idempotency_conflict`. Append an attempt suffix, such as `ticket-4822-triage-r1`.
+- [ ] **`deadline_ms` is set on purpose.** It defaults to 30,000 and is clamped to 1 to 120,000. A run that misses it fails with `504 deadline_exceeded`.
+- [ ] **Your HTTP client timeout is longer than `deadline_ms`.** `POST /v1/runs` answers only when the run has settled. Allow at least 10 seconds of margin over `deadline_ms`.
+- [ ] **A client timeout is recovered by resending the same request with the same key.** You get the stored run back instead of a new one: `200` with `replayed: true` once it has settled, `202` while it has not. A replay is never charged. See [Polling](/guides/polling).
+- [ ] **`max_output_tokens` is close to what the answers need.** It is required, and counts in full against a token quota at admission.
+- [ ] **Decision inputs stay under 3,968 tokens.** The estimate is the bytes of `state` divided by 4, rounded up, plus the bytes of the question set (`instructions`, `questions`, `draws` and `think_tokens`) divided by 4, rounded up. Above 3,968, the run is refused with `413 input_too_large`. See [Models and pricing](/getting-started/models-and-pricing).
+- [ ] **Bodies stay under 1 MiB.** Larger bodies are refused with `413 body_too_large`.
+- [ ] **The model is set on purpose.** Decision runs take an optional `model`: `"neon-1.1"` or `"neon-latest"`. Any other value is refused with `400 unknown_model`.
+
+## Observability
+
+- [ ] **You send your own `x-request-id`** on every call and log it next to your business id. A value of 1 to 128 characters from `A-Z a-z 0-9 . _ -` is echoed back; anything else is replaced by a server id. See [Request ids](/reference/request-ids).
+- [ ] **You log the `x-request-id` response header and `error.request_id`** for every failure. It is the value to quote when you ask about a request.
+- [ ] **You log `run_id`, `cost_micros` and `usage`** from each run, so your records join the [usage ledger](/guides/usage-reporting#the-ledger).
+- [ ] **You branch on `error.code`, never on `message`.** Messages are for people and can change. See [Error handling](/guides/error-handling).
+- [ ] **You handle bodies that are not JSON.** A few framework refusals on non-run routes (malformed JSON, a wrong `Content-Type`, an unknown field or query parameter) return plain text with no `request_id` in the body. Fall back to the status and the `x-request-id` header.
+
+## Error handling
+
+| Status | Codes | Your code should |
+| --- | --- | --- |
+| `400`, `401`, `403`, `404`, `409`, `413` | validation, auth, scope, conflict and size codes | Stop and fix the request or the key. Never retry unchanged. |
+| `402` | `insufficient_credits` | Pause every worker, alert a person, and resume with the same keys once credit is back. See [Handling insufficient credits](/guides/handling-insufficient-credits). |
+| `429` | `organization_spend_quota_exhausted`, `organization_token_quota_exhausted` | Pause and read `GET /v1/quota` before sending more. The same key is reusable. See [Spend limits and quotas](/guides/spend-limits-and-quotas). |
+| `500` | `internal_error` | Retry a few times at most with a **new** idempotency key, and report the `request_id` if it repeats. |
+| `503` | `decision_unavailable`, `provider_*`, `database_unavailable` and others | Retry with exponential backoff and a **new** idempotency key. |
+| `504` | `deadline_exceeded` | Retry with a new key, a larger `deadline_ms`, or a smaller input. |
+| `202` on a resend | a replay whose run is still `pending` | If it still answers `202` after the run's deadline has passed, that run failed before any model call and will not finish. Send again with a new key. See [Polling](/guides/polling). |
+
+- [ ] **Retries are bounded**: a few attempts with exponential backoff and jitter, then an alert.
+- [ ] **The policy comes from the status and `error.code`**, as in the table above. See [Error handling](/guides/error-handling).
+
+## Credit and spend
+
+- [ ] **Auto-recharge is on**, with a card saved, a threshold above one hour of spend plus 5,000 micros, and an amount above your busiest hour. It charges at most once per organization per clock hour. See [Auto-recharge](/guides/auto-recharge).
+- [ ] **The balance covers your concurrency.** Every run in flight holds its spend ceiling, up to 5,000 micros ($0.005), until it settles.
+- [ ] **A balance alert exists**, fed by `GET /v1/billing`, that fires before `balance_micros` gets near zero.
+- [ ] **A quota alert exists**, fed by `GET /v1/quota`, that fires when `remaining_spend_micros` or `remaining_tokens` falls below one normal day's use.
+- [ ] **Someone reviews spend** with [`GET /v1/usage/daily`](/guides/usage-reporting#spend-per-day) or the [console Usage page](/console/usage).
+- [ ] **Billing permissions are in the right hands.** Only owners, admins and billing users hold `billing_write`.
+
+## Before the switch
+
+Run these once from the production environment. `OPENTYPE_API_KEY` is the production runtime key; `OPENTYPE_MONITOR_KEY` is a separate key with `usage_read` and `billing_read` for your monitoring.
+
+<CodeGroup>
+
+```bash curl
+API=https://api.opentype.dev
+AUTH="Authorization: Bearer $OPENTYPE_API_KEY"
+
+# 1. The key sends a run and gets a completed decision back.
+curl -sS "$API/v1/runs" -H "$AUTH" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: prod-smoke-$(date -u +%Y%m%d)" \
+  -H "x-request-id: prod-smoke-$(date -u +%Y%m%d)" \
+  -d '{"kind": "decision", "model": "neon-1.1",
+       "state": {"ticket": "Please cancel my order 1182."},
+       "questions": {"cancel": {"type": "noul", "instructions": "Is the customer asking to cancel?"}},
+       "max_output_tokens": 16}' | jq '{state, cost_micros, replayed}'
+
+# 2. Resending the same request replays it instead of running it again.
+#    (Repeat step 1 and check replayed is true.)
+
+# 3. With a monitoring key holding usage_read and billing_read: room left, and credit.
+curl -sS "$API/v1/quota" -H "Authorization: Bearer $OPENTYPE_MONITOR_KEY" | jq '{remaining_spend_micros, remaining_tokens}'
+curl -sS "$API/v1/billing" -H "Authorization: Bearer $OPENTYPE_MONITOR_KEY" | jq '{balance_micros, auto_recharge, has_payment_method}'
+```
+
+```ts TypeScript
+const API = "https://api.opentype.dev";
+const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+
+const run = await fetch(`${API}/v1/runs`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": `prod-smoke-${today}`,
+    "x-request-id": `prod-smoke-${today}`,
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    model: "neon-1.1",
+    state: { ticket: "Please cancel my order 1182." },
+    questions: { cancel: { type: "noul", instructions: "Is the customer asking to cancel?" } },
+    max_output_tokens: 16,
+  }),
+});
+const body = await run.json();
+console.assert(run.ok && body.state === "completed", "smoke run did not complete", body);
+
+const monitor = { Authorization: `Bearer ${process.env.OPENTYPE_MONITOR_KEY}` };
+const quota = await (await fetch(`${API}/v1/quota`, { headers: monitor })).json();
+const billing = await (await fetch(`${API}/v1/billing`, { headers: monitor })).json();
+console.log({
+  remaining_spend_micros: quota.remaining_spend_micros,
+  balance_micros: billing.balance_micros,
+  auto_recharge: billing.auto_recharge.enabled,
+  has_payment_method: billing.has_payment_method,
+});
+```
+
+```python Python
+import os
+from datetime import datetime, timezone
+
+import requests
+
+API = "https://api.opentype.dev"
+today = datetime.now(timezone.utc).strftime("%Y%m%d")
+
+run = requests.post(
+    f"{API}/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Idempotency-Key": f"prod-smoke-{today}",
+        "x-request-id": f"prod-smoke-{today}",
+    },
+    json={
+        "kind": "decision",
+        "model": "neon-1.1",
+        "state": {"ticket": "Please cancel my order 1182."},
+        "questions": {"cancel": {"type": "noul", "instructions": "Is the customer asking to cancel?"}},
+        "max_output_tokens": 16,
+    },
+    timeout=40,
+)
+body = run.json()
+assert run.ok and body["state"] == "completed", body
+
+monitor = {"Authorization": f"Bearer {os.environ['OPENTYPE_MONITOR_KEY']}"}
+quota = requests.get(f"{API}/v1/quota", headers=monitor, timeout=30).json()
+billing = requests.get(f"{API}/v1/billing", headers=monitor, timeout=30).json()
+print({
+    "remaining_spend_micros": quota["remaining_spend_micros"],
+    "balance_micros": billing["balance_micros"],
+    "auto_recharge": billing["auto_recharge"]["enabled"],
+    "has_payment_method": billing["has_payment_method"],
+})
+```
+
+</CodeGroup>
+
+Expect a `completed` run with a small `cost_micros`, room left in the quota (or `null` limits), a positive balance, and auto-recharge enabled with a saved card.
+
+## Related
+
+- [Code examples](/guides/code-examples) - complete clients that implement this checklist.
+- [Error handling](/guides/error-handling) - the full status-to-action policy.
+- [Key rotation](/guides/key-rotation) - replace a secret without downtime.
+- [Auto-recharge](/guides/auto-recharge) - keep the balance funded.
+- [Limits](/reference/limits) - every size, count and time limit in one place.

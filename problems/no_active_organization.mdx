@@ -1,0 +1,78 @@
+---
+title: "no_active_organization"
+description: "HTTP 403: a console session has no active organization. Why API keys never get it, and how to sign in to an organization."
+icon: "building"
+keywords: ["no_active_organization", "403", "organization", "console session", "sign in", "switch organization"]
+---
+
+`no_active_organization` means a signed-in console session is not attached to an organization. Read this page if you see it in the console, or if you call the API with a console session instead of an API key.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `403` | `no_active_organization` | No. Choose an organization first. |
+
+## What happened
+
+Routes: every protected route under `/v1/`.
+
+Everything in OpenType belongs to an organization: runs, keys, usage, credit. Each request is served in the organization of its credential.
+
+- **API keys always carry their organization**, the one they were created in. A request with a valid key never gets this error.
+- **A console session** carries the organization you chose when you signed in. This session was verified, but it names no organization, or an empty one.
+
+The credential itself was accepted; OpenType could not tell which organization to act in.
+
+## How to fix
+
+- **In the console:** sign in again and choose an organization. If your account does not belong to one yet, create one.
+- **In your code:** use an API key instead of a console session. Create one on the [API keys page](/console/api-keys) while signed in to the organization it should belong to.
+
+## Example
+
+```json
+{"error":{"code":"no_active_organization","message":"the session has no active organization","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Calling the API with an API key, which always has an organization:
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/quota \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/quota", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+console.log(body.organization_id); // the organization this key acts in
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.get(
+    "https://api.opentype.dev/v1/quota",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+print(body["organization_id"])  # the organization this key acts in
+```
+</CodeGroup>
+
+The call needs `usage_read`.
+
+## Related
+
+- [Organizations and roles](/getting-started/organizations-and-roles) - what an organization holds and who can do what in it.
+- [Sign in to the console](/console/sign-in) - signing in and choosing an organization.
+- [Authentication](/security/authentication) - API keys versus console sessions.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

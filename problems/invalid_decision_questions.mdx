@@ -1,0 +1,164 @@
+---
+title: "invalid_decision_questions"
+description: "HTTP 400 on POST /v1/runs: the decision question set was refused. Every reason, the bound behind it, and how to fix the questions."
+icon: "list-check"
+keywords: ["invalid_decision_questions", "400", "decision run", "questions", "ask_if", "depends_on", "alternatives", "draws", "think_tokens"]
+---
+
+`invalid_decision_questions` means OpenType refused the question set of a decision run. Read this page when a decision run is refused with this code and you need to know which question, dependency or setting to change.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `400` | `invalid_decision_questions` | No. Fix the questions first. |
+
+## What happened
+
+Route: `POST /v1/runs` with `"kind": "decision"`.
+
+The questions, their dependencies, or the `draws` and `think_tokens` settings break one of the bounds below. The run was refused before it existed. Nothing was stored and nothing was charged.
+
+Every message starts with `the decision questions are not acceptable: ` and ends with one of these reasons. The limits in the right-hand column are not part of the message text.
+
+### Questions and answers
+
+| Reason | Bound |
+| --- | --- |
+| `a decision needs at least one question` | `questions` holds at least 1 question |
+| `the decision asks more questions than permitted` | at most 64 questions |
+| `every question id must be non-empty and contain no ':' or newline` | an id is not empty and has no `:`, `\n` or `\r` |
+| `two questions share an id` | ids are unique |
+| `every question needs at least two and at most twenty alternatives` | 2 to 20 answers per question; a `noul` question always has 2 (`yes` and `no`) |
+| `two alternatives of one question share a name` | option or level names are unique within a question |
+
+### Dependencies and conditions
+
+| Reason | Bound |
+| --- | --- |
+| `a question depends on a question that is not another question in this set` | every `depends_on` entry and every `ask_if` key names another question in the set; a question cannot name itself |
+| `the questions depend on each other in a cycle` | no dependency cycles; forward references are fine |
+| `an ask_if names an answer the question it depends on cannot produce` | each `ask_if` answer is a legal answer of the target: `yes` or `no` for `noul`, an option name for `choice`, a level name for `score` |
+| `an ask_if names no answers, so it can never be satisfied` | each `ask_if` list is not empty |
+
+### Settings and size
+
+| Reason | Bound |
+| --- | --- |
+| `draws must be at least one and at most eight` | `draws` is 1 to 8; the default is 1 |
+| `think_tokens must be at most four thousand and ninety-six` | `think_tokens` is 0 to 4096; the default is 0 |
+| `the question set is larger than the permitted size` | `instructions`, `questions`, `draws` and `think_tokens` together fit in 32 KiB of canonical JSON; `state` does not count |
+| `the question set could not be encoded` | the set could not be turned into canonical JSON |
+
+<Note>
+Two related refusals use other codes. `capability_hint` problems are reported as [`invalid_verdict_schema`](/problems/invalid_verdict_schema), even on a decision run. A missing `questions` field, or a `question_order` that does not name exactly the keys of `questions`, is [`invalid_body`](/problems/invalid_body).
+</Note>
+
+## How to fix
+
+1. Find the reason after the prefix in the tables above.
+2. Check every `depends_on` and `ask_if` against the ids in `questions`.
+3. For `ask_if`, use answer names, not indexes: `yes` or `no` for a `noul` question, the option name for `choice`, the level name for `score`.
+4. Split a set that is over 64 questions or 32 KiB into several runs.
+5. Send the corrected request. It was refused before a run existed, so you may keep the same `Idempotency-Key`.
+
+Some problems are not caught here. Whether each answer label is a single token, and whether the set fits the answer template, are checked only when the run executes. A failure there ends the run with [`decision_unavailable`](/problems/decision_unavailable). Keep option and level names short, simple words.
+
+## Example
+
+```json
+{"error":{"code":"invalid_decision_questions","message":"the decision questions are not acceptable: two questions share an id","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+A valid set with a condition: `bucket` is asked only when `urgent` is answered `yes`.
+
+<CodeGroup>
+```bash curl
+curl https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-triage" \
+  -d '{
+    "kind": "decision",
+    "instructions": "You triage customer support tickets.",
+    "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+    "questions": {
+      "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+      "bucket": {"type": "choice", "instructions": "which queue?",
+                 "criteria": {"billing": "payment problems", "other": null},
+                 "ask_if": {"urgent": ["yes"]}}
+    },
+    "max_output_tokens": 16
+  }'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4822-triage",
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    instructions: "You triage customer support tickets.",
+    state: { ticket: "I was charged twice this month and nobody answers my emails.", plan: "pro" },
+    questions: {
+      urgent: { type: "noul", instructions: "reply within the hour?" },
+      bucket: {
+        type: "choice",
+        instructions: "which queue?",
+        criteria: { billing: "payment problems", other: null },
+        ask_if: { urgent: ["yes"] },
+      },
+    },
+    max_output_tokens: 16,
+  }),
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+console.log(body.decision.answers);
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "ticket-4822-triage",
+    },
+    json={
+        "kind": "decision",
+        "instructions": "You triage customer support tickets.",
+        "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+        "questions": {
+            "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+            "bucket": {
+                "type": "choice",
+                "instructions": "which queue?",
+                "criteria": {"billing": "payment problems", "other": None},
+                "ask_if": {"urgent": ["yes"]},
+            },
+        },
+        "max_output_tokens": 16,
+    },
+    timeout=60,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+print(body["decision"]["answers"])
+```
+</CodeGroup>
+
+## Related
+
+- [Decision questions](/getting-started/decision-questions) - question types, answers and stages.
+- [Conditional questions](/guides/conditional-questions) - `depends_on` and `ask_if` in practice.
+- [Limits](/reference/limits) - question, alternative and size limits in one table.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

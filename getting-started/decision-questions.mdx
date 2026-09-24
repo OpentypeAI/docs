@@ -1,0 +1,213 @@
+---
+title: "Decision questions"
+description: "The noul, choice and score question types, depends_on, ask_if and alone, the bounds a question set must fit, stages, and the shape of every answer."
+icon: "list-check"
+keywords: ["questions", "noul", "yes/no", "choice", "score", "depends_on", "ask_if", "alone", "stages", "skipped", "label_mass", "answered_within_labels"]
+---
+
+A decision run asks typed questions about a `state` and returns a probability for every answer each question allows. This page defines the three question types, the fields that link questions together, the bounds a question set must fit, and the exact shape of every answer. Read it when you design a question set; the [Decision runs](/guides/decision-runs) guide then shows how to act on the answers.
+
+## The parts of a decision run
+
+```json
+{
+  "kind": "decision",
+  "instructions": "You triage customer support tickets.",
+  "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+  "questions": {
+    "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+    "bucket": {"type": "choice", "instructions": "which queue?",
+               "criteria": {"billing": "payment problems", "other": null}}
+  },
+  "max_output_tokens": 16
+}
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `kind` | yes | Must be `"decision"`. Without it, the run is a verdict run. |
+| `state` | yes | The thing being decided about. Any JSON value: a string is sent as is, anything else as its JSON text. |
+| `questions` | yes | An object keyed by your own question ids. Each value is one question. |
+| `instructions` | no | Context that applies to every question, such as the role the model plays. |
+| `question_order` | no | The order to read questions in within a stage. It must name exactly the keys of `questions`. Default: sorted ids. |
+| `draws` | no | 1 to 8, default 1. With more than 1, the run's `cost_basis` is `estimated`. |
+| `think_tokens` | no | 0 to 4,096, default 0. Hidden reasoning tokens the model may use before it answers. The reasoning text is never returned. |
+| `model` | no | `neon-1.1` or `neon-latest`. See [Models and pricing](/getting-started/models-and-pricing). |
+| `max_output_tokens` | yes | Greater than 0. |
+| `deadline_ms` | no | Default 30,000, clamped to 1 to 120,000. |
+
+## Question types
+
+Every question has a `type` and `instructions`. Unknown keys inside a question are refused.
+
+<Tabs>
+  <Tab title="noul (yes/no)">
+    A yes/no question. `criteria` is optional; when present, `true` and `false` describe each side.
+
+    ```json
+    {"urgent": {"type": "noul", "instructions": "Does this need a human reply within one hour?",
+                "criteria": {"true": "outage, legal threat, chargeback", "false": "everything else"}}}
+    ```
+
+    The answer names are always `yes` and `no`. Use them in `ask_if`.
+
+    ```json
+    {"urgent": {"type": "noul", "probability": 0.83, "label_mass": 0.991, "answered_within_labels": true}}
+    ```
+
+    `probability` is **P(yes)**. There is no `confidence` field on a `noul`.
+  </Tab>
+  <Tab title="choice (one of N)">
+    One of several named options. `criteria` maps each option name to a description, or to `null` when the name says enough.
+
+    ```json
+    {"bucket": {"type": "choice", "instructions": "which queue?",
+                "criteria": {"billing": "payment problems", "other": null}}}
+    ```
+
+    The answer names are your option names.
+
+    ```json
+    {"bucket": {"type": "choice", "choice": "billing", "probabilities": {"billing": 0.71, "other": 0.29},
+                "confidence": 0.71, "label_mass": 0.964, "answered_within_labels": true}}
+    ```
+
+    `choice` is the most likely option, `probabilities` covers every option **by name**, and the answer also carries a `confidence` between 0 and 1.
+  </Tab>
+  <Tab title="score (ordered level)">
+    An ordered scale. `criteria` is a list of level names, lowest first.
+
+    ```json
+    {"tone": {"type": "score", "instructions": "how annoyed?", "criteria": ["calm", "annoyed", "furious"]}}
+    ```
+
+    The answer names are your level names.
+
+    ```json
+    {"tone": {"type": "score", "score": 1.34, "legend": {"0": "calm", "1": "annoyed", "2": "furious"},
+              "probabilities": {"0": 0.12, "1": 0.42, "2": 0.46}, "confidence": 0.46,
+              "label_mass": 0.98, "answered_within_labels": true}}
+    ```
+
+    `score` is the expected level and is **0-indexed**: 1.34 sits between `annoyed` (1) and `furious` (2). It always lies between 0 and the number of levels minus 1. `legend` maps each index, as a string, to your level name, and `probabilities` is keyed by that index.
+  </Tab>
+</Tabs>
+
+## Linking questions
+
+Three optional fields work on every question type.
+
+| Field | Type | Effect |
+| --- | --- | --- |
+| `depends_on` | array of question ids | Read this question after the questions it names, in a later stage. |
+| `ask_if` | object: question id to a list of answer names | Ask this question only if the named question was answered with one of the listed answers. Otherwise the answer is `skipped`. |
+| `alone` | boolean | Read this question on its own rather than jointly with the rest of its stage. |
+
+Rules for `depends_on` and `ask_if`:
+
+- Every id must name another question in the same set. A question cannot name itself. Forward references are fine.
+- There must be no cycle; a cycle is refused with "the questions depend on each other in a cycle".
+- Every `ask_if` list must be non-empty and name answers the target can produce: `yes` or `no` for a `noul`, an option name for a `choice`, a level name for a `score`.
+
+### Stages
+
+OpenType schedules questions into **stages**. A stage holds every question whose `depends_on` questions are all in earlier stages. Within a stage, questions are read in `question_order`, or in sorted id order when you send none. The response's `decision.stages` lists the schedule that ran, one array of ids per stage.
+
+This `questions` object adds a gated question that is only asked when the ticket is not about billing:
+
+```json
+{
+  "urgent": {"type": "noul", "instructions": "reply within the hour?"},
+  "bucket": {"type": "choice", "instructions": "which queue?",
+             "criteria": {"billing": "payment problems", "other": null}},
+  "tone":   {"type": "score", "instructions": "how annoyed?", "criteria": ["calm", "annoyed", "furious"]},
+  "sales_lead": {"type": "noul", "instructions": "is this a sales inquiry?",
+                 "depends_on": ["bucket"], "ask_if": {"bucket": ["other"]}}
+}
+```
+
+`bucket` came back `billing`, so `sales_lead` is skipped. The `decision` object:
+
+```json
+{
+  "answers": {
+    "bucket": {"answered_within_labels": true, "choice": "billing", "confidence": 0.71,
+               "label_mass": 0.964, "probabilities": {"billing": 0.71, "other": 0.29}, "type": "choice"},
+    "sales_lead": {"because": {"answered": "billing", "question": "bucket", "required": ["other"]}, "type": "skipped"},
+    "tone": {"answered_within_labels": true, "confidence": 0.46, "label_mass": 0.98,
+             "legend": {"0": "calm", "1": "annoyed", "2": "furious"},
+             "probabilities": {"0": 0.12, "1": 0.42, "2": 0.46}, "score": 1.34, "type": "score"},
+    "urgent": {"answered_within_labels": true, "label_mass": 0.991, "probability": 0.83, "type": "noul"}
+  },
+  "draws": 1,
+  "read": "slot_constrained",
+  "model": "neon-1.1",
+  "stages": [["bucket", "tone", "urgent"], ["sales_lead"]]
+}
+```
+
+`bucket`, `tone` and `urgent` depend on nothing, so they share the first stage, in sorted id order. `sales_lead` depends on `bucket`, so it lands in the second stage. It would have been asked only if `bucket` had answered `other`.
+
+<Frame>
+  <img src="/images/product/decision-answered.png" alt="Decision run answering a noul, a choice and a score question about a support ticket, with one gated question skipped" width="1020" height="940" />
+</Frame>
+
+## Answer shapes
+
+`decision.answers` has one entry per question id, with keys in sorted order. Each entry has a `type`.
+
+| `type` | Fields |
+| --- | --- |
+| `noul` | `probability` (P(yes)) |
+| `choice` | `choice`, `probabilities` keyed by option name, `confidence` |
+| `score` | `score` (0-indexed), `legend`, `probabilities` keyed by index, `confidence` |
+| `skipped` | `because`: `{question, answered, required}`. `answered` is absent when the question it depended on was itself skipped. |
+
+A skipped answer is never `null`; check `type` before you read probabilities.
+
+Every `noul`, `choice` and `score` answer may also carry:
+
+- **`label_mass`**: the total probability the model put on your legal labels, before the probabilities were renormalized over them.
+- **`answered_within_labels`**: whether the model's single most likely token was one of your labels. When it is `false`, the probabilities you see are a renormalization over labels the model did not favour, so do not treat them as calibrated. Rephrase the question or the labels.
+
+Every probability and confidence is a finite number between 0 and 1.
+
+The rest of `decision`, on a live response:
+
+| Field | Meaning |
+| --- | --- |
+| `draws` | The number of draws used. |
+| `read` | `slot_constrained` or `reconstructed`. Runs today report `slot_constrained`. |
+| `model` | `"neon-1.1"`. |
+| `stages` | The schedule that ran. |
+| `thought_tokens`, `thought_closed` | Present when thinking tokens were generated. |
+
+A stored run, read with `GET /v1/runs/{run_id}` or replayed, keeps `answers`, `draws` and `read` but drops `model`, `stages` and the thought fields. See [Runs](/getting-started/runs#stored-runs-are-thinner).
+
+## Bounds
+
+A question set outside these bounds is refused with `400` [`invalid_decision_questions`](/problems/invalid_decision_questions) before anything is created or charged. The message starts with "the decision questions are not acceptable:" and names the reason.
+
+| Bound | Value |
+| --- | --- |
+| Questions per run | 1 to 64 |
+| Alternatives per question | 2 to 20 ("every question needs at least two and at most twenty alternatives"). A `noul` always has 2. |
+| Alternative names | Unique within a question |
+| Question id | Non-empty, unique, no `:`, no newline or carriage return |
+| `instructions` + `questions` + `draws` + `think_tokens` | 32 KiB in canonical form. The `state` is not counted. |
+| `draws` | 1 to 8 |
+| `think_tokens` | 0 to 4,096 |
+| `question_order` | Exactly the keys of `questions`, else `400 invalid_body` |
+
+Two more limits apply after a question set passes these bounds:
+
+- **Total input.** The state and questions together must fit the 3,968-token context of Neon 1.1, else `413` [`input_too_large`](/problems/input_too_large). See [Models and pricing](/getting-started/models-and-pricing#context-window).
+- **Label shape.** Each label is read as an answer token. Labels that cannot be read that way, or a set that does not fit the answer format, fail later with `503` [`decision_unavailable`](/problems/decision_unavailable). Short, common, single-word labels such as `billing`, `calm` or `high` are the safest choice.
+
+## Related
+
+- [Decision runs](/guides/decision-runs) - a full request, thresholds, and how to act on each answer type.
+- [Conditional questions](/guides/conditional-questions) - `depends_on`, `ask_if` and `alone` in depth.
+- [Choice questions](/guides/choice-questions) - design options that the model can tell apart.
+- [Score questions](/guides/score-questions) - scales, the 0-indexed legend, and thresholds on a score.
+- [invalid_decision_questions](/problems/invalid_decision_questions) - every refusal reason and its fix.

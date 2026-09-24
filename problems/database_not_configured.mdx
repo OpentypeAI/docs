@@ -1,0 +1,111 @@
+---
+title: "database_not_configured"
+description: "HTTP 503 on keys, usage, quota and billing routes: the service has no data store configured. Retry later; your request is fine."
+icon: "database"
+keywords: ["database_not_configured", "503", "data store", "keys", "usage", "quota", "billing"]
+---
+
+`database_not_configured` means the service has no data store configured for the route you called. Read this page when a keys, usage, quota or billing route answers with this code.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `database_not_configured` | Later. Nothing in your request can fix it. |
+
+## What happened
+
+Routes: the keys routes (`/v1/keys*`), the usage routes (`/v1/usage*` and `/v1/quota`), and the billing routes (`/v1/billing*`).
+
+These routes read and write stored records. When no data store is configured, they refuse every request with this code, after the credential and scope checks pass. So a `403 scope_denied` still comes first when your key lacks the scope.
+
+The runs routes report the same condition as [not_configured](/problems/not_configured).
+
+## How to fix
+
+- Retry after a few minutes. It is a service-side configuration problem, and a fast retry loop gets the same answer.
+- Nothing was written, so a retry of a `POST`, `PUT` or `DELETE` cannot apply twice.
+- If it persists, report the `request_id`.
+
+## Example
+
+```json
+{"error":{"code":"database_not_configured","message":"the durable store is not configured","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Retrying a read with backoff and your own request id:
+
+<CodeGroup>
+```bash curl
+for attempt in 1 2 3 4; do
+  STATUS=$(curl -sS -o response.json -w '%{http_code}' "https://api.opentype.dev/v1/usage/ledger?limit=50" \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "x-request-id: $(uuidgen)")
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # back off, then try again
+    *) break ;;
+  esac
+done
+cat response.json
+```
+
+```typescript TypeScript
+async function getWithRetry(path: string, maxAttempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    const requestId = crypto.randomUUID();
+    const res = await fetch(`https://api.opentype.dev${path}`, {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "x-request-id": requestId, // log it; quote it if the problem persists
+      },
+    });
+    if (res.ok) return res.json();
+
+    const code = (await res.json().catch(() => null))?.error?.code ?? `HTTP ${res.status}`;
+    console.error(`GET ${path} -> ${res.status} ${code} (${requestId})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${requestId})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const data = await getWithRetry("/v1/usage/ledger?limit=50"); // needs usage_read
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+def get_with_retry(path: str, max_attempts: int = 4) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        request_id = str(uuid.uuid4())
+        resp = requests.get(
+            f"https://api.opentype.dev{path}",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                "x-request-id": request_id,  # log it; quote it if the problem persists
+            },
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()
+
+        try:
+            code = resp.json()["error"]["code"]
+        except ValueError:
+            code = f"HTTP {resp.status_code}"
+        print(f"GET {path} -> {resp.status_code} {code} ({request_id})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{code} ({request_id})")
+        time.sleep(2 ** attempt)
+
+data = get_with_retry("/v1/usage/ledger?limit=50")  # needs usage_read
+```
+</CodeGroup>
+
+## Related
+
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Request ids](/reference/request-ids) - send your own `x-request-id` and quote it when you report a problem.
+- [not_configured](/problems/not_configured) - the same condition on the runs routes.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

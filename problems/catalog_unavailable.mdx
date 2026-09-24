@@ -1,0 +1,126 @@
+---
+title: "catalog_unavailable"
+description: "HTTP 503 on POST /v1/runs: the service could not read its model list, so it could not choose a model. Retry with backoff and a new Idempotency-Key."
+icon: "list"
+keywords: ["catalog_unavailable", "503", "model list", "service unavailable", "POST /v1/runs", "retry"]
+---
+
+`catalog_unavailable` means the service could not read its model list while choosing a model for your run. Read this page when runs fail with this code; it is a service-side problem and your request is fine.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `catalog_unavailable` | Yes, with backoff and a new `Idempotency-Key`. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+To route a run, OpenType reads the list of models it can call and their prices. The list is configured but could not be read at that moment, so no model was chosen. Nothing in your request causes this.
+
+The run was admitted, then failed before the model served it. Your organization is not charged: the run's hold is released. The run itself is not moved out of `pending`, and it stays `pending`. It is listed by `GET /v1/runs` and counted under `in_flight` in `GET /v1/usage`.
+
+Because of that, a replay with the **same** `Idempotency-Key` returns `202` with `"state": "pending"`, never the answer. Retry with a **new** key.
+
+## How to fix
+
+- Retry with backoff (for example 2, 4, 8 and 16 seconds) and a **new** `Idempotency-Key` on each attempt. Log the `request_id` of every failed attempt.
+- If every attempt over several minutes fails with this code, stop and report one of the `request_id` values.
+- Do not change the request: it was not the cause.
+
+## Example
+
+```json
+{"error":{"code":"catalog_unavailable","message":"the model catalog is not available","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+A retry loop with backoff and a new key per attempt:
+
+<CodeGroup>
+```bash curl
+BODY='{"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}'
+
+for attempt in 1 2 3 4; do
+  # A new Idempotency-Key per attempt: the failed run stays pending under the old key.
+  RESP=$(curl -sS -w '\n%{http_code}' https://api.opentype.dev/v1/runs \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -H "Idempotency-Key: $(uuidgen)" \
+    -d "$BODY")
+  STATUS=$(printf '%s' "$RESP" | tail -n1)
+  printf '%s\n' "$RESP" | sed '$d'
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # 500, 503, 504: back off, then try again
+    *) break ;;                        # success or 4xx: stop
+  esac
+done
+```
+
+```typescript TypeScript
+const body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16};
+
+async function createRunWithRetry(payload: unknown, maxAttempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch("https://api.opentype.dev/v1/runs", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "Content-Type": "application/json",
+        // A new key per attempt: the failed run stays pending under the old key.
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) return data;
+
+    const { code, message, request_id } = data.error;
+    console.error(`POST /v1/runs -> ${res.status} ${code}: ${message} (${request_id})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${request_id})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const run = await createRunWithRetry(body);
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+body = {"kind":"decision","state":{"ticket":"I was charged twice this month and nobody answers my emails."},"questions":{"urgent":{"type":"noul","instructions":"reply within the hour?"}},"max_output_tokens":16}
+
+def create_run_with_retry(payload: dict, max_attempts: int = 4) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        resp = requests.post(
+            "https://api.opentype.dev/v1/runs",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                # A new key per attempt: the failed run stays pending under the old key.
+                "Idempotency-Key": str(uuid.uuid4()),
+            },
+            json=payload,
+            timeout=130,  # longer than the largest deadline_ms (120,000 ms)
+        )
+        data = resp.json()
+        if resp.ok:
+            return data
+
+        err = data["error"]
+        print(f"POST /v1/runs -> {resp.status_code} {err['code']}: {err['message']} ({err['request_id']})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{err['code']} ({err['request_id']})")
+        time.sleep(2 ** attempt)
+
+run = create_run_with_retry(body)
+```
+</CodeGroup>
+
+## Related
+
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Idempotency](/guides/idempotency) - when to reuse an `Idempotency-Key` and when to send a new one.
+- [Request ids](/reference/request-ids) - send your own `x-request-id` and quote it when you report a problem.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

@@ -1,0 +1,115 @@
+---
+title: "input_too_large"
+description: "HTTP 413 on POST /v1/runs: the estimated input is over the token ceiling, or does not fit Neon 1.1's context. How the estimate works and how to fix it."
+icon: "text-width"
+keywords: ["input_too_large", "413", "tokens", "context", "3,968 tokens", "64,000 tokens", "input estimate", "POST /v1/runs"]
+---
+
+`input_too_large` means the input of a run is too large to process, measured in estimated tokens rather than bytes. Read this page if you send long tickets, documents or states in decision runs.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `413` | `input_too_large` | No. Shrink the input first. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+OpenType estimates the input size of every run before it calls the model:
+
+```text
+input estimate = ceil(prompt bytes / 4) + ceil(contract bytes / 4)
+```
+
+The prompt is `system` and `messages` for a verdict run, or `state` for a decision run. The contract is the verdict `schema`, or the decision `instructions`, `questions`, `draws` and `think_tokens`, in canonical JSON. The estimate is refused in two places:
+
+| Where | Limit | What happened to the run | Retry with |
+| --- | --- | --- | --- |
+| Admission | the estimate is over 64,000 tokens | refused before a run existed; nothing stored or charged | the same `Idempotency-Key` |
+| Routing | the input does not fit the model's context; for Neon 1.1 decision runs, 3,968 tokens | the run was admitted, then failed before any model call; nothing charged, and the run stays `pending` | a **new** `Idempotency-Key` |
+
+For Neon 1.1, the routing limit is the one you meet first: a decision run's input must fit in 3,968 tokens, far below the 64,000-token ceiling.
+
+The admission message names the estimate, as in the example below. Branch on `code`, not on the message.
+
+## How to fix
+
+1. Estimate before you send: count the UTF-8 bytes of the prompt and of the contract, divide each by 4 and round up. Keep a decision run's total well under 3,968 tokens.
+2. Send only what the questions need. Drop unused fields from `state`, strip markup and signatures, and truncate long threads to the latest messages.
+3. Shorten `instructions` and question text, or split a large question set across several runs.
+4. Retry with the right key:
+   - If the input was refused at admission (over 64,000 tokens), the key is still free; reuse it.
+   - Otherwise, use a new key. A replay of the old key returns `202` with the `pending` run instead of running again.
+
+When you are unsure which case applied, use a new key. A new key never replays a stuck run.
+
+## Example
+
+```json
+{"error":{"code":"input_too_large","message":"the input estimate of 70123 tokens exceeds the ceiling","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Estimating a decision run before sending it:
+
+<CodeGroup>
+```bash curl
+# state.json holds the decision state; contract.json holds instructions + questions.
+STATE_BYTES=$(jq -c . state.json | tr -d '\n' | wc -c)
+CONTRACT_BYTES=$(jq -c . contract.json | tr -d '\n' | wc -c)
+EST=$(( (STATE_BYTES + 3) / 4 + (CONTRACT_BYTES + 3) / 4 ))
+echo "estimated input: $EST tokens (decision limit 3968)"
+```
+
+```typescript TypeScript
+const DECISION_CONTEXT_TOKENS = 3968;
+
+const bytes = (v: unknown) =>
+  new TextEncoder().encode(typeof v === "string" ? v : JSON.stringify(v)).length;
+
+const state = { ticket: "I was charged twice this month and nobody answers my emails.", plan: "pro" };
+const contract = {
+  instructions: "You triage customer support tickets.",
+  questions: { urgent: { type: "noul", instructions: "reply within the hour?" } },
+};
+
+const estimate = Math.ceil(bytes(state) / 4) + Math.ceil(bytes(contract) / 4);
+if (estimate > DECISION_CONTEXT_TOKENS) {
+  throw new Error(`estimated ${estimate} tokens; trim the state before sending`);
+}
+// Approximate: the server measures the canonical JSON of the contract.
+console.log(`estimated input: ${estimate} tokens`);
+```
+
+```python Python
+import json
+import math
+
+DECISION_CONTEXT_TOKENS = 3968
+
+
+def byte_len(value) -> int:
+    text = value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
+    return len(text.encode("utf-8"))
+
+
+state = {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"}
+contract = {
+    "instructions": "You triage customer support tickets.",
+    "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+}
+
+estimate = math.ceil(byte_len(state) / 4) + math.ceil(byte_len(contract) / 4)
+if estimate > DECISION_CONTEXT_TOKENS:
+    raise ValueError(f"estimated {estimate} tokens; trim the state before sending")
+# Approximate: the server measures the canonical JSON of the contract.
+print(f"estimated input: {estimate} tokens")
+```
+</CodeGroup>
+
+## Related
+
+- [Models and pricing](/getting-started/models-and-pricing) - Neon 1.1's context and prices.
+- [Limits](/reference/limits) - the token ceiling and the context limit with every other limit.
+- [Idempotency](/guides/idempotency) - why a run stuck in `pending` needs a new key.
+- [body_too_large](/problems/body_too_large) - the body is over 1 MiB before any token count.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

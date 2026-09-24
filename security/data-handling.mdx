@@ -1,0 +1,161 @@
+---
+title: "Data handling"
+description: "What OpenType sends to the model, what a run keeps and returns, who can read it, and how keys and session tokens are kept out of logs."
+icon: "database"
+keywords: ["data handling", "privacy", "state", "input_digest", "output_digest", "redaction", "logs", "sha-256", "personal data"]
+---
+
+This page is for engineers and reviewers who need to know what happens to the data in an OpenType request. It covers which fields reach the model, what a run record holds and who can read it back, and how credentials are kept out of storage and logs. It only states what the API does; it makes no claims beyond that.
+
+## What reaches the model
+
+A run sends its input to the model: Neon 1.1 for decision runs. What the model reads depends on the kind of run.
+
+| Run kind | Sent to the model | How it is sent |
+| --- | --- | --- |
+| `decision` | `state`, read against your `questions` | A string `state` is sent as-is. Any other JSON value is sent as its JSON text. |
+| `verdict` | `system` and `messages`, and depending on the route your `schema` | Every returned verdict is validated against your `schema` |
+
+<Tip>
+Everything in `state` is model input. Send only the fields your questions need. If a ticket triage only needs the subject and body, leave out the customer's email address, card details and account ids.
+</Tip>
+
+For example, this `state` gives the model what it needs to triage a ticket and nothing else:
+
+```json
+{
+  "kind": "decision",
+  "instructions": "You triage customer support tickets.",
+  "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+  "questions": {
+    "urgent": {"type": "noul", "instructions": "reply within the hour?"}
+  },
+  "max_output_tokens": 16
+}
+```
+
+## What a run returns and keeps
+
+Each admitted run gets a record in your organization. The live response to `POST /v1/runs` carries the answer, and later reads return the stored record.
+
+| Field | What it holds |
+| --- | --- |
+| `run_id` | The run's id, `run_` + 32 hex |
+| `input_digest` | A 64-character hex SHA-256 digest of the run's input. Always present. |
+| `output_digest` | A 64-character hex SHA-256 digest of the answer, when the run produced one |
+| `decision` or `verdict` | The stored answer, on completed runs |
+| `usage`, `cost_micros` | Token counts and cost, when known |
+
+The digests let you check whether two runs had the same input, or produced the same answer, without comparing the content itself.
+
+What each read returns:
+
+| Read | Scope | Includes the answer |
+| --- | --- | --- |
+| `GET /v1/runs` | `runs_read` | No. Each row has `run_id`, `kind`, `state`, the digests and `replayed`. |
+| `GET /v1/runs/{run_id}` | `runs_read` | Yes, for a completed run, with `usage` and `cost_micros` |
+| `GET /v1/runs/{run_id}/stream` | `runs_read` | Yes, in the `terminal` event of a completed run |
+
+The stored answer does not include everything the live response did. When thought tokens are generated, a live decision reports `thought_tokens` and `thought_closed`. The thought text itself is never returned, live or stored.
+
+### Read a stored answer
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/runs/run_a4314b6cc08f4bd8814099a613abeb44 \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const runId = "run_a4314b6cc08f4bd8814099a613abeb44";
+const res = await fetch(`https://api.opentype.dev/v1/runs/${runId}`, {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+const run = await res.json();
+console.log(run.state, run.input_digest, run.decision?.answers);
+```
+
+```python Python
+import os
+import requests
+
+run_id = "run_a4314b6cc08f4bd8814099a613abeb44"
+res = requests.get(
+    f"https://api.opentype.dev/v1/runs/{run_id}",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+res.raise_for_status()
+run = res.json()
+print(run["state"], run["input_digest"], run.get("decision", {}).get("answers"))
+```
+
+</CodeGroup>
+
+```json
+{
+  "run_id": "run_a4314b6cc08f4bd8814099a613abeb44",
+  "kind": "decision",
+  "state": "completed",
+  "input_digest": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+  "output_digest": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+  "decision": {
+    "answers": {
+      "urgent": {"answered_within_labels": true, "label_mass": 0.991, "probability": 0.83, "type": "noul"}
+    },
+    "draws": 1,
+    "read": "slot_constrained"
+  },
+  "usage": {"input_tokens": 412, "output_tokens": 23},
+  "cost_micros": 19,
+  "replayed": true
+}
+```
+
+## Who can read your runs
+
+- Runs belong to the organization of the credential that created them.
+- Any credential in that organization with `runs_read` can list runs and read every stored answer. Give `runs_read` only to processes and people who should see answers. See [Scopes and roles](/security/scopes-and-roles).
+- A run id from another organization returns `404 run_not_found`, the same as an id that does not exist. The response does not reveal whether the run exists elsewhere.
+
+## Credentials
+
+| Credential | What OpenType does with it |
+| --- | --- |
+| API key secret | Stores only its SHA-256 digest, plus the 13-character `secret_prefix` for display. Never writes the secret to logs. Returns it only in the create and rotate responses. |
+| Console session token | Never stores it and never logs it |
+| `Authorization` and `cookie` headers | Redacted in the server's request traces |
+
+The API accepts credentials only in the `Authorization` header. It does not read credentials from cookies, and a key secret sent in a URL path is refused with [`400 secret_in_path`](/problems/secret_in_path) before any lookup. Details are in [API key security](/security/api-key-security).
+
+## Other values you send
+
+| Value | What happens to it | Advice |
+| --- | --- | --- |
+| `Idempotency-Key` | Stored with the run and unique within your organization. It does not expire. | Build it from a business id, such as `ticket-4822-triage`. Do not put personal data or secrets in it. |
+| `x-request-id` | Echoed back in the response header and in every error body, when it matches `^[A-Za-z0-9._-]{1,128}$` | Use an opaque id. Do not put personal data or secrets in it. |
+| Key `name` and service-account `id` | Stored on the key and returned by `GET /v1/keys` to anyone with `keys_read` | Name keys after workloads, not people's personal details |
+
+## Error messages
+
+An error's `message` is written by OpenType for people to read. It never contains output from the model provider, so it is safe to log. Branch on `error.code`, and log `error.request_id` with it. See [Error handling](/guides/error-handling).
+
+```json
+{"error":{"code":"run_not_found","message":"the run was not found","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+## Your side
+
+- **Minimize input.** Put only what the questions need into `state`, `instructions` and `questions`.
+- **Keep keys on your server.** Browser code that calls the API exposes your key and every answer it can read.
+- **Scrub your own logs.** Strip `Authorization` headers and request bodies from your application logs, or log the `run_id` and `input_digest` instead of the payload.
+- **Scope reads.** A key that only sends runs and uses the answer from the response needs `runs_write` alone, and cannot read back other runs.
+
+## Related
+
+- [API key security](/security/api-key-security) - how key secrets are stored, shown once, and retired.
+- [Scopes and roles](/security/scopes-and-roles) - who can read runs and answers.
+- [Runs](/getting-started/runs) - the full run lifecycle and response fields.
+- [Idempotency](/guides/idempotency) - how the Idempotency-Key and input digest decide a replay.
+- [Request ids](/reference/request-ids) - the x-request-id rules in full.

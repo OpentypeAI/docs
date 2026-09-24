@@ -1,0 +1,121 @@
+---
+title: "budget_exhausted"
+description: "HTTP 503 on POST /v1/runs: the run's own spend budget cannot cover the model call. Shrink the input or max_output_tokens and retry with a new key."
+icon: "coins"
+keywords: ["budget_exhausted", "503", "spend ceiling", "per-request ceiling", "max_output_tokens", "POST /v1/runs", "micro-USD"]
+---
+
+`budget_exhausted` means the run's own spend budget could not cover a model call. Read this page when large runs fail with this code while small ones succeed.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `budget_exhausted` | After you shrink the input or `max_output_tokens`. Use a new `Idempotency-Key`. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+Every run has a spend ceiling of at most 5,000 micro-USD ($0.005). Your organization's configuration can lower it, never raise it; `GET /v1/quota` reports it as `limits.request_spend_ceiling_micros`. The run holds that ceiling while it runs.
+
+`budget_exhausted` is raised when the run's own budget cannot cover what it is about to do:
+
+- the reservation for the run was refused;
+- the spend ceiling used when choosing a model was hit;
+- the run's budget of calls or tokens ran out.
+
+It is not the same as a quota refusal. Organization quotas answer `429` before the run exists; see [organization_spend_quota_exhausted](/problems/organization_spend_quota_exhausted). It is not a credit problem either; that answers `402` [insufficient_credits](/problems/insufficient_credits).
+
+The run was refused before the model served it. You are not charged, and the hold is released, but the run stays `pending`. A replay with the same `Idempotency-Key` returns `202` with `"state": "pending"`.
+
+## How to fix
+
+1. **Lower `max_output_tokens`.** A decision answer needs few output tokens; the examples in these docs use `16`.
+2. **Shrink the input.** Trim the `state` to the fields the questions need, and shorten `instructions` and question text.
+3. **Check the ceiling** with `GET /v1/quota` (needs `usage_read`). If `request_spend_ceiling_micros` is below 5,000, your organization's configuration lowered it.
+4. **Retry with a new `Idempotency-Key`.** `max_output_tokens` is not part of the key's identity, so the old key would replay the pending run instead of running the smaller request.
+
+## Example
+
+```json
+{"error":{"code":"budget_exhausted","message":"the request has no remaining spend budget","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Reading the ceiling before you size a run:
+
+<CodeGroup>
+```bash curl
+for attempt in 1 2 3 4; do
+  STATUS=$(curl -sS -o response.json -w '%{http_code}' "https://api.opentype.dev/v1/quota" \
+    -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+    -H "x-request-id: $(uuidgen)")
+  case "$STATUS" in
+    5??) sleep $((2 ** attempt)) ;;  # back off, then try again
+    *) break ;;
+  esac
+done
+cat response.json
+```
+
+```typescript TypeScript
+async function getWithRetry(path: string, maxAttempts = 4) {
+  for (let attempt = 1; ; attempt++) {
+    const requestId = crypto.randomUUID();
+    const res = await fetch(`https://api.opentype.dev${path}`, {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+        "x-request-id": requestId, // log it; quote it if the problem persists
+      },
+    });
+    if (res.ok) return res.json();
+
+    const code = (await res.json().catch(() => null))?.error?.code ?? `HTTP ${res.status}`;
+    console.error(`GET ${path} -> ${res.status} ${code} (${requestId})`);
+    if (res.status < 500 || attempt >= maxAttempts) throw new Error(`${code} (${requestId})`);
+    await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
+  }
+}
+
+const data = await getWithRetry("/v1/quota"); // needs usage_read
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+def get_with_retry(path: str, max_attempts: int = 4) -> dict:
+    for attempt in range(1, max_attempts + 1):
+        request_id = str(uuid.uuid4())
+        resp = requests.get(
+            f"https://api.opentype.dev{path}",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+                "x-request-id": request_id,  # log it; quote it if the problem persists
+            },
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()
+
+        try:
+            code = resp.json()["error"]["code"]
+        except ValueError:
+            code = f"HTTP {resp.status_code}"
+        print(f"GET {path} -> {resp.status_code} {code} ({request_id})")
+        if resp.status_code < 500 or attempt == max_attempts:
+            raise RuntimeError(f"{code} ({request_id})")
+        time.sleep(2 ** attempt)
+
+data = get_with_retry("/v1/quota")  # needs usage_read
+```
+</CodeGroup>
+
+## Related
+
+- [Spend limits and quotas](/guides/spend-limits-and-quotas) - the per-request ceiling and the period limits.
+- [Models and pricing](/getting-started/models-and-pricing) - what a run costs per token.
+- [Limits](/reference/limits) - every size and count limit in one table.
+- [Idempotency](/guides/idempotency) - when to reuse an `Idempotency-Key` and when to send a new one.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

@@ -1,0 +1,129 @@
+---
+title: "Sign in to the console"
+sidebarTitle: "Sign in"
+description: "Sign in or sign up at console.opentype.dev with Google, GitHub, a password or an emailed code; verify your email, reset a password, pick an organization."
+icon: "right-to-bracket"
+keywords: ["sign in", "sign up", "log in", "login", "password reset", "verify email", "one-time code", "Google", "GitHub", "choose an organization"]
+---
+
+This page walks through every screen between an open browser tab and the console's Playground: signing in, signing up, the emailed codes, password reset, email verification, and choosing an organization. Read it when you sign in for the first time, or when a sign-in screen shows a message you do not recognize.
+
+The console signs you in as a person. Your code never signs in: it sends an API key, which you create in the console once you are in. See [API keys](/console/api-keys).
+
+## Sign in
+
+Open [console.opentype.dev](https://console.opentype.dev). If you are not signed in, you land on **Sign in**.
+
+<Steps>
+  <Step title="Pick a method">
+    Choose **Continue with Google** or **Continue with GitHub**, or use the email form under **or with email**.
+  </Step>
+  <Step title="With a password">
+    Enter **Email** and **Password**, then choose **Sign in**. The button reads **Signing in…** while it works.
+  </Step>
+  <Step title="Or with a code">
+    Choose **Email me a code instead**, enter your **Email**, and choose **Email me a sign-in code**. On **Check your email**, enter the six-digit **Code** and choose **Sign in**. The code works once, for ten minutes. **Use another email** starts over; **Use a password instead** takes you back to the password form.
+  </Step>
+  <Step title="Land in the console">
+    You arrive on the Playground. If your account belongs to more than one organization, you choose one first; see [Choose an organization](#choose-an-organization).
+  </Step>
+</Steps>
+
+**Check your email** reads *If you@example.com has an account, a six-digit code is on its way.* The wording is the same whether or not the address has an account, so the screen never tells anyone which addresses are registered.
+
+With Google or GitHub, the provider's own page opens, you approve there, and the provider sends you back to the console. The console checks that the round trip started in the same browser before it signs you in.
+
+## Create an account
+
+Sign-up is open to anyone. From **Sign in**, choose **Create an account** next to *New here?*
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| **First name** | No | |
+| **Last name** | No | |
+| **Work email** | Yes | The address you sign in with, and the one the $5 credit is tied to |
+| **Password** | Yes | At least 10 characters. Checked against known breaches |
+
+Choose **Create account**. You can also use **Continue with Google** or **Continue with GitHub** on the same screen instead of a password. The note under the form says what you get: *You get your own organization and $5 of credit once your email is verified. One grant per email address.* Details are in [Create an account](/getting-started/create-an-account).
+
+**Already have one? Sign in** takes you back.
+
+## Verify your email
+
+When your email address still needs verifying, sign-in stops at **Verify your email**: *We sent a six-digit code to you@example.com. Enter it to finish signing in.*
+
+1. Enter the **Code** and choose **Verify and continue**.
+2. No email? Choose **Send a new code**. The screen confirms with *A new code is on its way.*
+3. Wrong address? Choose **Use another email** to start over.
+
+Verification is what releases the $5 sign-up credit, and it is required to create an organization.
+
+## Reset a password
+
+<Steps>
+  <Step title="Ask for a link">
+    On **Sign in**, choose **Forgot password?**. On **Reset your password**, enter your **Email** and choose **Email me a link**. The answer is the same whether or not the address has an account: *If this address has an account, a reset link is on its way. It expires in ten minutes.*
+  </Step>
+  <Step title="Choose a new password">
+    Open the link from the email. On **Choose a new password**, enter the **New password** (at least 10 characters, checked against known breaches) and choose **Set password**. The link works once. If it has expired, choose **Send a new link**.
+  </Step>
+  <Step title="Sign in again">
+    You return to **Sign in** with *Password changed: Sign in with your new password.* Sessions you already had on other browsers stay signed in until they expire.
+  </Step>
+</Steps>
+
+## Choose an organization
+
+If your account belongs to more than one organization, sign-in stops at **Choose an organization**. Each organization is listed with its name and its id. Choose one to open the console in it.
+
+Everything you then see, create or spend belongs to that organization: its balance, its keys, its usage. To work in another organization, choose **Sign out** in the top bar, sign in again, and pick the other one. **Sign in as someone else** on this screen starts over with a different account.
+
+## Your account has no organization yet
+
+A new account normally gets its organization, and its credit, the moment sign-up finishes. If that step did not complete, the console shows this above every page:
+
+> **Your account has no organization yet**
+> Create one to run reads and manage keys. It comes with $5 of credit if your email is verified and has not received it before.
+
+Type an **Organization name** (optional) and choose **Create organization**. When it works, the Playground opens with *Welcome. $5.00 of credit is on your account.* If the address already received its credit, the organization is created without it.
+
+If it does not work, the Playground shows **The organization was not created: {code}**. The usual code is `email_not_verified`: sign out, sign in again, and enter the code emailed to you on **Verify your email**.
+
+Until you have an organization, API calls that need one answer `403 no_active_organization`. See [no_active_organization](/problems/no_active_organization).
+
+## Staying signed in, and signing out
+
+The console keeps you signed in and renews your session in the background, so you are not asked to sign in again while you work. A temporary outage of the API does not end your session: you may land on **Sign in** with a message about the API, and your session works again once the API answers. If the renewal is refused, you land on **Sign in** with **Your session expired**.
+
+**Sign out** in the top bar ends your session on this browser and returns you to **Sign in** with **Signed out**.
+
+## Messages on the sign-in screen
+
+When sign-in sends you back, a box at the top of **Sign in** says why. Some also show a *request reference*; keep it with your notes on the problem.
+
+| Heading | What it means | What to do |
+| --- | --- | --- |
+| **Signed out** | Your session on this browser has ended | Sign in again |
+| **Your session expired** | The session could not be renewed | Sign in again. Nothing you had open was sent |
+| **Password changed** | The reset finished | Sign in with the new password |
+| **That step timed out** | Codes and half-finished sign-ins last ten minutes on this browser | Start again |
+| **This sign-in was not started here** | The return from Google or GitHub did not match a sign-in this browser began, so no session was created | Start again from **Sign in** in the same browser |
+| **This sign-in link has expired** | Provider sign-in links are single-use and short-lived | Start again |
+| **This link or step is no longer valid** | The link or code was already used, or has expired | Start again |
+| **Sign-in was cancelled at the provider** | You declined, or closed the provider's page | Start again, or pick another method |
+| **The identity provider sent no code** | The provider returned without completing sign-in | Start again |
+| **This account uses two-factor authentication** | The console cannot complete a two-factor sign-in yet | Sign in with a method that does not ask for a second factor |
+| **Sign-in is unavailable right now** | The sign-in service did not answer | Try again in a moment. Nothing on your side needs to change |
+| **The API is not reachable right now** | The console could not reach the API, so no sign-in was started | Try again in a moment |
+| **The API did not answer in time** | No sign-in was started | Try again in a moment |
+| **The API is not ready** | The API was starting up | Try again in a moment |
+
+A form that refuses what you typed, such as a wrong password or code, shows the reason and its code above the form and keeps what you typed, except the password.
+
+## Related
+
+- [Create an account](/getting-started/create-an-account) - the $5 sign-up credit, and when it is granted.
+- [Console overview](/console) - the four console pages and what your role lets you do on each.
+- [API keys](/console/api-keys) - create the key your code sends instead of signing in.
+- [Organizations and roles](/getting-started/organizations-and-roles) - what an organization holds and what each role can do.
+- [Troubleshooting](/getting-started/troubleshooting) - symptoms across the console and the API, and their fixes.

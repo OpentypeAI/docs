@@ -1,0 +1,90 @@
+---
+title: "run_not_found"
+description: "HTTP 404 on run and run-usage lookups: no run with that id exists in your organization. Common causes and how to find the right run."
+icon: "magnifying-glass"
+keywords: ["run_not_found", "404", "run_id", "GET /v1/runs/{run_id}", "usage", "organization", "not found"]
+---
+
+`run_not_found` means the run id is well formed, but no run with that id exists in the organization of your credential. Read this page when a run you just created, or one you stored earlier, cannot be read back.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `404` | `run_not_found` | No. Check the id and the organization. |
+
+## What happened
+
+Routes and their messages:
+
+| Route | Message |
+| --- | --- |
+| `GET /v1/runs/{run_id}` | `the run was not found` |
+| `GET /v1/runs/{run_id}/stream` | `the run was not found` |
+| `GET /v1/usage/runs/{run_id}` | `no such run` |
+
+Runs belong to one organization, and every lookup is limited to the organization of the credential. A run created with a key from another organization is reported as not found. OpenType does not say whether the run exists elsewhere.
+
+Common causes:
+
+- The key belongs to a different organization than the key that created the run.
+- The id was mistyped or copied from somewhere else. A value that is not `run_` plus a UUID is refused earlier, with [`invalid_run_id`](/problems/invalid_run_id) on the runs routes and [`invalid_parameter`](/problems/invalid_parameter) on the usage route.
+- The `POST /v1/runs` that should have created it was refused. A refused request returns an error, not a `run_id`, so no run exists.
+
+## How to fix
+
+1. Read the run with a key from the organization that created it.
+2. Use the `run_id` exactly as the API returned it. Both spellings work: `run_` + 32 hex from the runs API, and `run_` + a hyphenated UUID from the usage API.
+3. If you lost the id, list recent runs with `GET /v1/runs`. Rows come newest first and carry `run_id`, `kind`, `state` and `input_digest`.
+4. If a create call timed out and you never saw a `run_id`, do not guess: send the same `POST /v1/runs` again with the same `Idempotency-Key`. You get the stored run back instead of a second run: `200` once it has finished, `202` while it is still `pending`.
+
+## Example
+
+```json
+{"error":{"code":"run_not_found","message":"the run was not found","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Listing recent runs to recover an id. The call needs `runs_read`.
+
+<CodeGroup>
+```bash curl
+curl -G https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  --data-urlencode "limit=20"
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs?limit=20", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+for (const run of body.runs) {
+  console.log(run.run_id, run.kind, run.state); // newest first
+}
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.get(
+    "https://api.opentype.dev/v1/runs",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    params={"limit": 20},
+    timeout=30,
+)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+for run in body["runs"]:
+    print(run["run_id"], run["kind"], run["state"])  # newest first
+```
+</CodeGroup>
+
+## Related
+
+- [Polling](/guides/polling) - read a run back after a client timeout.
+- [Idempotency](/guides/idempotency) - recover a run you never saw by replaying its key.
+- [invalid_run_id](/problems/invalid_run_id) - the id is not shaped like a run id.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

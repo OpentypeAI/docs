@@ -1,0 +1,190 @@
+---
+title: "API conventions"
+sidebarTitle: "Conventions"
+description: "Base URL, JSON rules, id formats, timestamps, half-open time windows, micro-USD amounts, the body cap, and CORS for the OpenType API."
+icon: "ruler-combined"
+keywords: ["conventions", "base url", "id format", "micro-usd", "timestamps", "cors", "json"]
+---
+
+Every OpenType route follows the same small set of rules for URLs, bodies, identifiers, time and money. Read this page once before you write a client, and come back to it when a value looks unfamiliar. Each rule below is enforced by the server, not just recommended.
+
+## Base URL and versioning
+
+```text
+https://api.opentype.dev
+```
+
+Every customer route lives under `/v1`, for example `POST /v1/runs` and `GET /v1/usage`. Three routes need no credential: `GET /healthz`, `GET /readyz` and `GET /openapi.json`, which serves the OpenAPI 3.1 document the server itself emits. Every other customer route under `/v1` takes `Authorization: Bearer <credential>`; see [Authentication](/security/authentication).
+
+## Requests
+
+- **JSON in, JSON out.** Send request bodies as JSON with `Content-Type: application/json`. Field names are snake_case.
+- **Unknown fields are refused.** Every request body rejects fields it does not define, so a typo fails loudly instead of being ignored. On `POST /v1/runs` this is `400 invalid_body` with the message `the request body is not valid: the body does not match the schema`. On other routes the refusal is a plain-text 422 (see [Errors](/reference/errors#plain-text-rejections)).
+- **Unknown query parameters are refused.** `GET /v1/runs` accepts only `limit` and `offset`; the usage routes accept only their documented parameters.
+- **1 MiB body cap.** A body over 1,048,576 bytes is refused before it is read. `POST /v1/runs` answers `413 body_too_large`; other routes answer a plain-text 413.
+- **One header for idempotency.** `POST /v1/runs` requires an `Idempotency-Key` header of 1 to 255 printable ASCII bytes. No other route reads it. See [Idempotency](/guides/idempotency).
+
+## Identifiers
+
+Every id is an opaque string with a type prefix. Store ids as strings and compare them exactly; do not parse the part after the prefix.
+
+| Id | Format | Example | Where you see it |
+| --- | --- | --- | --- |
+| Run id | `run_` + 32 hex | `run_a4314b6cc08f4bd8814099a613abeb44` | `run_id` in run responses and run lists |
+| Run id, usage form | `run_` + a hyphenated UUID | `run_a4314b6c-c08f-4bd8-8140-99a613abeb44` | `run_id` in the usage ledger and `GET /v1/usage/runs/{run_id}` |
+| Key id | `key_` + 32 hex | `key_d92a9043204d41c09c78fc813d54ef06` | `id` on a key object; goes in URLs |
+| Key secret | `otsk_` + 64 hex | `otsk_...` | only in the create and rotate responses; never in URLs |
+| Request id | `req_` + 32 hex, or your own value | `req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d` | `x-request-id` header and `error.request_id` |
+| Transaction id | `txn_` + 32 hex | `txn_5dc319db99f644e8b8f55ce6b7f55fed` | `id` on a billing transaction |
+| Daily usage transaction | `txn_usage_` + `YYYYMMDD` | `txn_usage_20260924` | one usage row per UTC day in `GET /v1/billing` |
+| Organization id | opaque string | `org_example` | `organization_id` in usage, quota and billing responses |
+
+The two run id spellings name the same run. Both are accepted wherever a run id is expected, so you can take a `run_id` from the ledger and pass it to `GET /v1/runs/{run_id}`, or the other way round.
+
+`input_digest` and `output_digest` on a run are 64-character lowercase hex SHA-256 digests.
+
+## Timestamps and dates
+
+- Every timestamp is a string in exactly `YYYY-MM-DDTHH:MM:SSZ` form: UTC, second precision, a literal `Z`. For example `2026-09-24T10:12:03Z`.
+- Timestamp fields end in `_at`: `created_at`, `last_used_at`, `revoked_at`, `start_at`, `end_at`.
+- Daily rows use a date, `YYYY-MM-DD`, for example `"date": "2026-09-24"`.
+
+When you send a timestamp, send the same form. The usage routes refuse anything else, including fractional seconds and offsets such as `+00:00`, with `400 invalid_parameter`.
+
+## Time windows
+
+`GET /v1/usage`, `GET /v1/usage/ledger` and `GET /v1/usage/daily` take an optional window.
+
+| Rule | Detail |
+| --- | --- |
+| Parameters | `start_at` and `end_at`, both or neither |
+| Default | the current quota period: the current UTC calendar month |
+| Shape | half-open, `[start_at, end_at)`: `start_at` is included, `end_at` is not |
+| Order | `start_at` must be before `end_at` |
+| Daily series | at most 92 days between `start_at` and `end_at` |
+
+Because windows are half-open, consecutive windows never double-count. September 2026 is `start_at=2026-09-01T00:00:00Z&end_at=2026-10-01T00:00:00Z`.
+
+## Money
+
+Every amount is an integer in micro-USD. Amount fields end in `_micros`.
+
+| Micros | US dollars |
+| --- | --- |
+| 1 | $0.000001 |
+| 10,000 | $0.01 (one cent) |
+| 5,000 | $0.005, the per-request spend ceiling |
+| 1,000,000 | $1 |
+| 5,000,000 | $5, the smallest credit purchase |
+
+`balance_micros` and the `amount_micros` of a billing transaction are signed: a usage row is negative, a purchase is positive. Every other amount is zero or positive. Integers avoid floating-point rounding; divide by 1,000,000 only when you display a dollar value.
+
+## Optional fields
+
+Absent values are represented in two ways, depending on the route family:
+
+- **Run responses omit them.** A run that produced no output has no `output_digest` key at all, and a verdict run has no `decision` key.
+- **Keys, usage and billing responses send `null`.** A key that was never used has `"last_used_at": null`; a quota with no period limit has `"period_spend_limit_micros": null`.
+
+Write clients that accept both a missing key and a `null` value.
+
+## Pagination
+
+| Route | Parameters | Default | Range |
+| --- | --- | --- | --- |
+| `GET /v1/runs` | `limit`, `offset` | 20, 0 | `limit` 1 to 100; out-of-range values are clamped |
+| `GET /v1/usage/ledger` | `limit` | 50 | 1 to 200; `0` is refused, larger values are clamped to 200 |
+| `GET /v1/keys` | none | every key | no paging |
+| `GET /v1/billing` | none | last 50 transactions | fixed |
+
+Lists are newest first. See [Pagination](/guides/pagination).
+
+## CORS
+
+The API answers browser preflights for the allowed origins configured on the service. When CORS applies:
+
+| Setting | Value |
+| --- | --- |
+| Methods | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` |
+| Allowed request headers | `authorization`, `content-type`, `idempotency-key`, `x-request-id` |
+| Exposed response headers | `x-request-id` |
+| Preflight cache | 600 seconds |
+| Credentials | not allowed; no cookies are read |
+
+Keep API keys out of browser code. A key in a web page is readable by anyone who loads it; call the API from your server instead. See [API key security](/security/api-key-security).
+
+## Example: a request that uses every convention
+
+This call reads usage for a half-open window, sends its own request id, and gets integer micro-USD amounts back.
+
+<CodeGroup>
+
+```bash cURL
+curl -sS -i "https://api.opentype.dev/v1/usage?start_at=2026-09-01T00:00:00Z&end_at=2026-10-01T00:00:00Z" \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "x-request-id: billing-report-2026-09"
+```
+
+```ts TypeScript
+const params = new URLSearchParams({
+  start_at: "2026-09-01T00:00:00Z",
+  end_at: "2026-10-01T00:00:00Z", // excluded: the window is [start_at, end_at)
+});
+const res = await fetch(`https://api.opentype.dev/v1/usage?${params}`, {
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "x-request-id": "billing-report-2026-09",
+  },
+});
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code} (${body.error.request_id})`);
+console.log(res.headers.get("x-request-id"), body.spend.settled_micros / 1_000_000, "USD");
+```
+
+```python Python
+import os, requests
+
+res = requests.get(
+    "https://api.opentype.dev/v1/usage",
+    params={"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "x-request-id": "billing-report-2026-09",
+    },
+    timeout=30,
+)
+body = res.json()
+if not res.ok:
+    raise RuntimeError(f"{body['error']['code']} ({body['error']['request_id']})")
+print(res.headers["x-request-id"], body["spend"]["settled_micros"] / 1_000_000, "USD")
+```
+
+</CodeGroup>
+
+```json
+{
+  "organization_id": "org_example",
+  "window": {"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
+  "runs": {"total": 3, "completed": 2, "failed": 0, "in_flight": 1},
+  "tokens": {"input_tokens": 824, "output_tokens": 46, "total_tokens": 870},
+  "spend": {"reserved_micros": 5038, "settled_micros": 38, "unsettled_micros": 5000}
+}
+```
+
+## What goes wrong
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `400 invalid_body`, "the body does not match the schema" | an unknown or misspelled field, or a wrong type, on `POST /v1/runs` | compare the body with the [API reference](/api-reference/introduction) |
+| Plain-text 422 on another route | an unknown field or a wrong type | same; the body is text, so read the status |
+| Plain-text 415 | no `Content-Type: application/json` on a JSON route | add the header |
+| `400 invalid_parameter`, "start_at must be an RFC 3339 UTC timestamp..." | a timestamp with milliseconds, an offset, or no `Z` | send `YYYY-MM-DDTHH:MM:SSZ` |
+| `400 invalid_parameter`, "start_at and end_at must be supplied together" | one window bound without the other | send both, or neither for the current month |
+| A total counts one day twice | overlapping windows | use the previous `end_at` as the next `start_at` |
+
+## Related
+
+- [Request ids](/reference/request-ids) - trace one request across your logs and ours.
+- [Limits](/reference/limits) - every numeric bound in one table.
+- [Errors](/reference/errors) - the error envelope and what each status means.
+- [Pagination](/guides/pagination) - walk run lists and the usage ledger.

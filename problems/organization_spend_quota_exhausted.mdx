@@ -1,0 +1,101 @@
+---
+title: "organization_spend_quota_exhausted"
+description: "HTTP 429 on POST /v1/runs: the 5,000-micro per-request ceiling exceeds the spend left in this quota period. How the check works and what to do."
+icon: "gauge-high"
+keywords: ["organization_spend_quota_exhausted", "429", "spend quota", "period spend limit", "quota", "GET /v1/quota", "POST /v1/runs"]
+---
+
+`organization_spend_quota_exhausted` means your organization's spend limit for the current period has too little room left to start another run. Read this page when runs fail with a 429 and the code names spend.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `429` | `organization_spend_quota_exhausted` | Yes, with backoff, once the period has room. Keep the same `Idempotency-Key`. |
+
+## What happened
+
+Route: `POST /v1/runs`.
+
+An organization can have a spend limit per quota period. The period is the current UTC calendar month. Before each run, OpenType compares the run's **per-request spend ceiling**, at most 5,000 micro-USD ($0.005), with the spend left in the period. If the ceiling is larger than what is left, the run is refused.
+
+The check uses the ceiling, not the actual cost. A decision run that would cost 19 micros is still refused when fewer than 5,000 micros remain.
+
+What is left counts runs in flight: it is the limit minus the larger of settled spend and held spend. Each run holds its full ceiling until it settles, so many concurrent runs can use up the room for a short time.
+
+The run was refused before it existed. Nothing was stored and nothing was charged. A replay of an `Idempotency-Key` that already owns a run is never refused with 429.
+
+The message gives both numbers:
+
+```text
+the estimated provider spend of <n> micro-USD exceeds the <m> micro-USD remaining in this quota period
+```
+
+<Note>
+A 429 from OpenType always means a period quota refused the run. The response does not say when to retry, so choose your own backoff.
+</Note>
+
+## How to fix
+
+1. Read the quota with `GET /v1/quota` (needs `usage_read`). Compare `remaining_spend_micros` with `limits.request_spend_ceiling_micros`.
+2. If runs in flight are holding the room, back off and retry. Holds are released as runs settle.
+3. If the period is used up, wait for the next period, which starts at 00:00:00Z on the first day of the next month.
+4. Retry with the same `Idempotency-Key`. The refused request never created a run.
+
+Keep enough headroom: a run can start only while at least one full ceiling, 5,000 micros, is left in the period.
+
+## Example
+
+```json
+{"error":{"code":"organization_spend_quota_exhausted","message":"the estimated provider spend of 5000 micro-USD exceeds the 1200 micro-USD remaining in this quota period","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Checking the room left before sending runs:
+
+<CodeGroup>
+```bash curl
+curl -s https://api.opentype.dev/v1/quota \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  | jq '{period, ceiling: .limits.request_spend_ceiling_micros, remaining: .remaining_spend_micros}'
+```
+
+```typescript TypeScript
+const res = await fetch("https://api.opentype.dev/v1/quota", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+const quota = await res.json();
+if (!res.ok) throw new Error(`${quota.error.code}: ${quota.error.message}`);
+
+const ceiling = quota.limits.request_spend_ceiling_micros;
+const remaining = quota.remaining_spend_micros; // null means no spend limit
+
+if (remaining !== null && remaining < ceiling) {
+  console.warn(`spend quota: ${remaining} micros left, a run needs ${ceiling}; resets ${quota.period.end_at}`);
+}
+```
+
+```python Python
+import os
+import requests
+
+resp = requests.get(
+    "https://api.opentype.dev/v1/quota",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+quota = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{quota['error']['code']}: {quota['error']['message']}")
+
+ceiling = quota["limits"]["request_spend_ceiling_micros"]
+remaining = quota["remaining_spend_micros"]  # None means no spend limit
+
+if remaining is not None and remaining < ceiling:
+    print(f"spend quota: {remaining} micros left, a run needs {ceiling}; resets {quota['period']['end_at']}")
+```
+</CodeGroup>
+
+## Related
+
+- [Spend limits and quotas](/guides/spend-limits-and-quotas) - period limits, the per-request ceiling and `GET /v1/quota`.
+- [organization_token_quota_exhausted](/problems/organization_token_quota_exhausted) - the token side of the same period quota.
+- [Error handling](/guides/error-handling) - a backoff policy for 429 and 5xx.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

@@ -1,0 +1,112 @@
+---
+title: "Glossary"
+description: "The OpenType API terms you meet across these docs, from alternative to verdict run, in alphabetical order, each linked to the page that covers it."
+icon: "book"
+keywords: ["glossary", "terminology", "definitions", "noul", "choice", "score", "stage", "hold", "micro-USD", "scope"]
+---
+
+This page defines the words the OpenType API and these docs use with a precise meaning, for anyone reading a response or an error for the first time. Terms are in alphabetical order; most are field names you will see on the wire, written the way the API spells them. Each entry links to the page that explains the thing in full.
+
+## A to D
+
+| Term | What it means |
+| --- | --- |
+| **alternative** | One possible answer to a decision question: `yes` or `no` for a `noul`, an option name for a `choice`, a level name for a `score`. Each question needs 2 to 20 alternatives, with unique names; a `noul` always has exactly 2. Keep each name a single short word: names the model cannot read as a single token fail with `503 decision_unavailable`. See [Decision questions](/getting-started/decision-questions). |
+| **`answered_within_labels`** | A boolean on each answer. `true` means the single most likely token was one of the question's alternatives. `false` means the model favoured something else, and the probabilities you get are a renormalisation over labels it did not prefer, so treat them with care. See [Decision questions](/getting-started/decision-questions). |
+| **`ask_if`** | An optional field on a question: an object mapping another question's id to the answers that trigger this one, such as `{"urgent": ["yes"]}`. When the condition is not met, the answer is `{"type": "skipped", "because": {...}}` instead of a probability. Every list must be non-empty and name answers the other question can produce. See [Conditional questions](/guides/conditional-questions). |
+| **`choice`** | A question type that picks one option out of several. `criteria` maps each option name to a description or `null`. The answer carries `choice` (the most likely option), `probabilities` keyed by option name, and `confidence`. See [Choice questions](/guides/choice-questions). |
+| **decision run** | A run sent with `"kind": "decision"`: a `state` plus a set of `questions`, answered with a probability for each alternative of each question in exactly one model call. Decision runs are what Neon 1.1 serves. See [Decision runs](/guides/decision-runs). |
+| **`depends_on`** | An optional field on a question: the ids of questions that must be answered before it, in an earlier stage. A question cannot depend on itself, and a cycle is refused with `400 invalid_decision_questions`. See [Conditional questions](/guides/conditional-questions). |
+| **`draws`** | A decision-run setting from 1 to 8, default 1, echoed as `decision.draws` in the response. It is part of the request's idempotency identity, and a run with `draws` above 1 reports `cost_basis: "estimated"`. See [Decision runs](/guides/decision-runs). |
+
+## H to M
+
+| Term | What it means |
+| --- | --- |
+| **hold** | The credit a run reserves when it is admitted: its whole per-request ceiling of 5,000 micro-USD ($0.005), kept until the run settles and then replaced by the actual cost. Holds are subtracted from `balance_micros`, so a run needs at least 5,000 micro-USD of available credit to start, or it gets `402 insufficient_credits`. Usage reports show held amounts as `reserved_micros`. A run that fails before a model served it has its hold released. See [Handling insufficient credits](/guides/handling-insufficient-credits). |
+| **idempotency key** | The value of the `Idempotency-Key` header, required on `POST /v1/runs`: 1 to 255 bytes, unique within your organization, and never expiring. The same key with the same body returns the stored run with `"replayed": true` and is not charged again; the same key with a different body gets `409 idempotency_conflict`. See [Idempotency](/guides/idempotency). |
+| **`label_mass`** | The total probability the model put on a question's alternatives before the probabilities were renormalised to sum to 1. A value near 1 means the model answered within your labels; a low value means much of its probability went elsewhere. See [Decision questions](/getting-started/decision-questions). |
+| **ledger** | The usage record with one entry per model call, returned by `GET /v1/usage/ledger`, newest first. Each entry has `run_id`, `retry_ordinal`, `provider` (`opentype`), `model_id` (`neon-1.1`), `status` (`succeeded` or `failed`), `tokens`, `cost_micros` and `created_at`. See [Usage reporting](/guides/usage-reporting). |
+| **micro-USD** | The unit of every amount in the API: 1,000,000 micro-USD is 1 US dollar, and 10,000 is one cent. Amount fields end in `_micros` and are integers. The $5 sign-up credit is 5,000,000 micro-USD. See [Models and pricing](/getting-started/models-and-pricing). |
+
+## N to Q
+
+| Term | What it means |
+| --- | --- |
+| **`noul`** | The yes/no question type. Its alternatives are always `yes` and `no`, and the optional `criteria` can describe each as `{"true": ..., "false": ...}`. The answer's `probability` is the probability of `yes`; a `noul` answer has no `confidence` field. See [Noul questions](/guides/noul-questions). |
+| **organization** | The tenant that owns your API keys, runs, usage, quota and credit. A key always acts in the organization it was created in, and idempotency keys are unique per organization. See [Organizations and roles](/getting-started/organizations-and-roles). |
+| **period** | The quota period: the current UTC calendar month, from 00:00:00Z on the first of the month up to, but not including, 00:00:00Z on the first of the next. Quotas count within it, and usage routes use it as their default window. `GET /v1/quota` returns it as `period`. See [Spend limits and quotas](/guides/spend-limits-and-quotas). |
+| **principal** | Who an API key acts as, written `{"type": "user" or "service_account", "id": ...}`. Leave it out and the key acts as you. Naming another user is refused with `403 principal_is_not_the_caller`. See [Scopes and roles](/security/scopes-and-roles). |
+| **quota** | An optional per-organization limit on spend, tokens or both within a period. A run that would exceed one is refused with `429 organization_spend_quota_exhausted` or `429 organization_token_quota_exhausted`. A quota is not a rate limit: OpenType has none. `GET /v1/quota` shows the limits and what remains, with `null` meaning no limit. See [Spend limits and quotas](/guides/spend-limits-and-quotas). |
+
+## R to S
+
+| Term | What it means |
+| --- | --- |
+| **request id** | The value of the `x-request-id` header on every response, repeated as `error.request_id` in JSON errors. The server keeps an id you send when it matches `^[A-Za-z0-9._-]{1,128}$`, and otherwise mints `req_` followed by 32 hex characters. Log it with every failure. See [Request ids](/reference/request-ids). |
+| **role** | The set of scopes a person holds in an organization: `owner`, `admin`, `member`, `billing` or `viewer`. `owner` and `admin` hold all nine scopes; the others hold subsets. A key cannot be given a scope its creator does not hold. See [Organizations and roles](/getting-started/organizations-and-roles). |
+| **run** | One request to `POST /v1/runs`, stored under an id of `run_` followed by 32 hex characters. Its `kind` is `decision` or `verdict`, and its `state` is `pending`, `completed` or `failed`. The call returns once the run has settled. See [Runs](/getting-started/runs). |
+| **scope** | A permission on a credential, required route by route. There are nine, written in snake_case: `runs_read`, `runs_write`, `keys_read`, `keys_write`, `members_read`, `members_write`, `billing_read`, `billing_write` and `usage_read`. A missing scope gives `403 scope_denied`, and a key's scopes are fixed when it is created. See [Scopes](/reference/scopes). |
+| **`score`** | A question type that rates on ordered levels, listed in `criteria` from first to last. The answer's `score` is the expected level index, counted from 0; `legend` maps each index to your level name, `probabilities` are keyed by index, and `confidence` is included. See [Score questions](/guides/score-questions). |
+| **service account** | A key principal that is not a person: `{"type": "service_account", "id": ...}`, with an id you choose. Creating a service-account key needs the `members_write` scope as well as `keys_write`. See [Scopes and roles](/security/scopes-and-roles). |
+| **stage** | A group of questions read together. Questions are scheduled by their `depends_on`: each stage holds every question whose dependencies are all in earlier stages, ordered by `question_order` or by sorted id. A live decision response reports the schedule that ran as `decision.stages`, an array of arrays of question ids. See [Conditional questions](/guides/conditional-questions). |
+
+## T to V
+
+| Term | What it means |
+| --- | --- |
+| **`think_tokens`** | A decision-run setting from 0 to 4,096, default 0: the number of thought tokens the model may generate before it answers. When it generated some, the live response reports `thought_tokens` and `thought_closed`. The thought text itself is never returned. See [Decision runs](/guides/decision-runs). |
+| **verdict run** | A run sent with `"kind": "verdict"`, or with no `kind`: `messages` plus a JSON Schema, answered with one JSON document validated against that schema. Neon 1.1 does not serve verdict runs, so they answer `503 no_route_available`. See [Verdict runs](/guides/verdict-runs). |
+
+## The terms in one response
+
+This live decision response shows most of the answer-side terms in place:
+
+```json
+{
+  "run_id": "run_a4314b6cc08f4bd8814099a613abeb44",
+  "kind": "decision",
+  "state": "completed",
+  "input_digest": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+  "output_digest": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+  "decision": {
+    "answers": {
+      "bucket": {"answered_within_labels": true, "choice": "billing", "confidence": 0.71,
+                 "label_mass": 0.964, "probabilities": {"billing": 0.71, "other": 0.29}, "type": "choice"},
+      "tone":   {"answered_within_labels": true, "confidence": 0.46, "label_mass": 0.98,
+                 "legend": {"0": "calm", "1": "annoyed", "2": "furious"},
+                 "probabilities": {"0": 0.12, "1": 0.42, "2": 0.46}, "score": 1.34, "type": "score"},
+      "urgent": {"answered_within_labels": true, "label_mass": 0.991, "probability": 0.83, "type": "noul"}
+    },
+    "draws": 1,
+    "read": "slot_constrained",
+    "model": "neon-1.1",
+    "stages": [["urgent", "bucket", "tone"]],
+    "thought_tokens": 48,
+    "thought_closed": true
+  },
+  "usage": {"input_tokens": 412, "output_tokens": 23},
+  "cost_micros": 19,
+  "cost_basis": "provider_reported",
+  "replayed": false
+}
+```
+
+| Where | Term |
+| --- | --- |
+| `run_id`, `kind`, `state` | [run](/getting-started/runs), [decision run](/guides/decision-runs) |
+| `answers.urgent` | a [`noul`](/guides/noul-questions): `probability` is the probability of `yes` |
+| `answers.bucket` | a [`choice`](/guides/choice-questions) with two alternatives, `billing` and `other` |
+| `answers.tone` | a [`score`](/guides/score-questions): 1.34 on a 0-indexed legend, between `annoyed` and `furious` |
+| `label_mass`, `answered_within_labels` | how much of the model's probability landed on your alternatives |
+| `draws`, `thought_tokens`, `thought_closed` | [`draws`](/guides/decision-runs) and [`think_tokens`](/guides/decision-runs) at work |
+| `stages` | one [stage](/guides/conditional-questions), because no question uses `depends_on` |
+| `cost_micros` | 19 [micro-USD](/getting-started/models-and-pricing), charged when the run settled, in place of its [hold](/guides/handling-insufficient-credits) |
+| `replayed` | `false`: a live answer; a replay under the same [idempotency key](/guides/idempotency) says `true` |
+
+## Related
+
+- [Frequently asked questions](/getting-started/faq) - short answers that use these terms in context.
+- [Decision questions](/getting-started/decision-questions) - the question types, their bounds and their answers in full.
+- [Runs](/getting-started/runs) - what a run is, its states, and what it returns.
+- [Troubleshooting](/getting-started/troubleshooting) - the errors behind the terms, with fixes.

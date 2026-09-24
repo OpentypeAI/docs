@@ -1,0 +1,133 @@
+---
+title: "OpenType documentation"
+sidebarTitle: "Introduction"
+description: "OpenType answers typed yes/no, choice and score questions about a JSON state in one model call per run, with a calibrated probability for every answer."
+icon: "house"
+keywords: ["introduction", "overview", "what is OpenType", "decision runs", "Neon 1.1", "calibrated probabilities"]
+---
+
+OpenType answers typed questions about a piece of JSON in one model call per run. You send a `state` (a support ticket, a contract clause, a database row) and a set of questions: yes/no (`noul`), one of N (`choice`), or an ordered level (`score`). You get back a probability for every answer you defined, so your code compares numbers to thresholds instead of parsing prose. This page is for developers who are evaluating or integrating the API: it shows one request, the conventions every request shares, and where to go next.
+
+## One request
+
+A decision run is one `POST /v1/runs`. This one asks a single yes/no question about a ticket.
+
+<CodeGroup>
+
+```bash cURL
+curl -sS https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-urgent" \
+  -d '{
+    "kind": "decision",
+    "instructions": "You triage customer support tickets.",
+    "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+    "questions": {
+      "urgent": {"type": "noul", "instructions": "reply within the hour?"}
+    },
+    "max_output_tokens": 16
+  }'
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/runs", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "ticket-4822-urgent",
+  },
+  body: JSON.stringify({
+    kind: "decision",
+    instructions: "You triage customer support tickets.",
+    state: { ticket: "I was charged twice this month and nobody answers my emails.", plan: "pro" },
+    questions: { urgent: { type: "noul", instructions: "reply within the hour?" } },
+    max_output_tokens: 16,
+  }),
+});
+const run = await res.json();
+console.log(run.decision.answers.urgent.probability); // P(yes)
+```
+
+```python Python
+import os, requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/runs",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Idempotency-Key": "ticket-4822-urgent",
+    },
+    json={
+        "kind": "decision",
+        "instructions": "You triage customer support tickets.",
+        "state": {"ticket": "I was charged twice this month and nobody answers my emails.", "plan": "pro"},
+        "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+        "max_output_tokens": 16,
+    },
+    timeout=130,
+)
+print(res.json()["decision"]["answers"]["urgent"]["probability"])  # P(yes)
+```
+
+</CodeGroup>
+
+The answer to `urgent` comes back under `decision.answers`:
+
+```json
+{"answered_within_labels": true, "label_mass": 0.991, "probability": 0.83, "type": "noul"}
+```
+
+`probability` is the probability of "yes". `label_mass` and `answered_within_labels` tell you how much of the model's mass landed on your labels, so you know when a number is trustworthy. Live responses report `decision.model` as `"neon-1.1"`. The [quickstart](/getting-started/quickstart) walks through a full response with all three question types.
+
+## What every request has in common
+
+| | |
+| --- | --- |
+| Base URL | `https://api.opentype.dev`. Every API route is under `/v1/`. |
+| Auth | `Authorization: Bearer otsk_...`, an API key you create in the [console](/console/api-keys). See [Authentication](/security/authentication). |
+| Idempotency | `POST /v1/runs` requires an `Idempotency-Key` header of 1 to 255 bytes. See [Idempotency](/guides/idempotency). |
+| Body | JSON with `Content-Type: application/json`, snake_case field names, at most 1 MiB. Unknown fields are refused. |
+| Model | **Neon 1.1**. The optional `model` field on decision runs takes `neon-1.1` or `neon-latest`. See [Models and pricing](/getting-started/models-and-pricing). |
+| Money | Integers in micro-USD, in fields ending `_micros`. 1,000,000 micros is \$1. |
+| Timestamps | UTC strings in exactly `YYYY-MM-DDTHH:MM:SSZ` form, in fields ending `_at`. |
+| IDs | Opaque prefixed strings: `run_...`, `key_...`, `req_...`. |
+| Request id | Every response carries an `x-request-id` header. Send your own value to have it echoed back. |
+| Errors | `{"error": {"code", "message", "request_id"}}`. Branch on `code`. See [Errors](/reference/errors). |
+
+## Start here
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/getting-started/quickstart">
+    Create a key, send a decision run, and read the probabilities in about five minutes.
+  </Card>
+  <Card title="Create an account" icon="user-plus" href="/getting-started/create-an-account">
+    Sign up, verify your email, and receive \$5 of free credit.
+  </Card>
+  <Card title="Runs" icon="play" href="/getting-started/runs">
+    What a run is, its states, what a response contains, and how replays work.
+  </Card>
+  <Card title="Decision questions" icon="list-check" href="/getting-started/decision-questions">
+    The `noul`, `choice` and `score` types, dependencies, bounds, and answer shapes.
+  </Card>
+  <Card title="Console" icon="window-maximize" href="/console">
+    The playground, API keys, usage, and billing in the browser.
+  </Card>
+  <Card title="Guides" icon="book-open" href="/guides">
+    Triage, gating, retries, polling, spend control, and production hardening.
+  </Card>
+  <Card title="Errors" icon="triangle-exclamation" href="/reference/errors">
+    Every error code, what triggers it, and what to do next.
+  </Card>
+  <Card title="API reference" icon="terminal" href="/api-reference/introduction">
+    Every endpoint, generated from the OpenAPI document.
+  </Card>
+</CardGroup>
+
+## Related
+
+- [Quickstart](/getting-started/quickstart) - send your first decision run end to end.
+- [Decision runs](/guides/decision-runs) - a full triage example with thresholds and gated questions.
+- [Models and pricing](/getting-started/models-and-pricing) - what one run costs and how the arithmetic works.
+- [Errors](/reference/errors) - the error envelope and every code the API returns.

@@ -1,0 +1,106 @@
+---
+title: "key_revoked"
+description: "HTTP 409 on POST /v1/keys/{key_id}/rotate: a revoked key cannot be rotated. Why revocation is final and how to replace the key."
+icon: "ban"
+keywords: ["key_revoked", "409", "rotate", "revoked key", "POST /v1/keys/{key_id}/rotate", "create key"]
+---
+
+`key_revoked` means you tried to rotate a key that has already been revoked. Read this page if a rotation script fails with a 409.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `409` | `key_revoked` | No. Create a new key. |
+
+## What happened
+
+Route: `POST /v1/keys/{key_id}/rotate`.
+
+Revoking a key is final. A revoked key cannot be rotated, re-enabled or given a new secret; it stays in the key list with `state: "revoked"` as an audit record. Nothing changed.
+
+This code appears only on rotation. A request authenticated with a revoked key gets [`invalid_credential`](/problems/invalid_credential), not `key_revoked`.
+
+## How to fix
+
+1. Create a new key with `POST /v1/keys`, with the scopes the old key had. The old key's `scopes` are still listed on it.
+2. Store the new `secret`; it is shown once.
+3. Deploy it to the services that used the old key.
+
+In a rotation script, skip keys whose `state` is `revoked` before calling rotate.
+
+## Example
+
+```json
+{"error":{"code":"key_revoked","message":"a revoked key cannot be rotated; create a new key","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Replacing a revoked key with a new one that has the same name and scopes. The calls need `keys_read` and `keys_write`.
+
+<CodeGroup>
+```bash curl
+OLD=$(curl -s https://api.opentype.dev/v1/keys/key_d92a9043204d41c09c78fc813d54ef06 \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY")
+
+curl https://api.opentype.dev/v1/keys \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "$(echo "$OLD" | jq '{name, scopes}')"
+```
+
+```typescript TypeScript
+const headers = {
+  Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+  "Content-Type": "application/json",
+};
+const keyId = "key_d92a9043204d41c09c78fc813d54ef06";
+
+const old = await fetch(`https://api.opentype.dev/v1/keys/${keyId}`, { headers }).then((r) => r.json());
+
+const url = old.state === "revoked"
+  ? "https://api.opentype.dev/v1/keys"                          // create a replacement
+  : `https://api.opentype.dev/v1/keys/${keyId}/rotate`;         // rotate in place
+const init: RequestInit = old.state === "revoked"
+  ? { method: "POST", headers, body: JSON.stringify({ name: old.name, scopes: old.scopes }) }
+  : { method: "POST", headers };
+
+const res = await fetch(url, init);
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code}: ${body.error.message}`);
+// body.secret is shown only once. Store it now.
+console.log(body.id, body.secret_prefix);
+```
+
+```python Python
+import os
+import requests
+
+headers = {"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"}
+key_id = "key_d92a9043204d41c09c78fc813d54ef06"
+
+old = requests.get(f"https://api.opentype.dev/v1/keys/{key_id}", headers=headers, timeout=30).json()
+
+if old["state"] == "revoked":
+    # Create a replacement.
+    resp = requests.post(
+        "https://api.opentype.dev/v1/keys",
+        headers={**headers, "Content-Type": "application/json"},
+        json={"name": old["name"], "scopes": old["scopes"]},
+        timeout=30,
+    )
+else:
+    # Rotate in place.
+    resp = requests.post(f"https://api.opentype.dev/v1/keys/{key_id}/rotate", headers=headers, timeout=30)
+
+body = resp.json()
+if not resp.ok:
+    raise RuntimeError(f"{body['error']['code']}: {body['error']['message']}")
+# body["secret"] is shown only once. Store it now.
+print(body["id"], body["secret_prefix"])
+```
+</CodeGroup>
+
+## Related
+
+- [Key rotation](/guides/key-rotation) - rotate in place or overlap two keys.
+- [API keys in the console](/console/api-keys) - see which keys are active or revoked.
+- [invalid_credential](/problems/invalid_credential) - what a request made with a revoked key gets.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

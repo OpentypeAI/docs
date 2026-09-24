@@ -1,0 +1,319 @@
+---
+title: "Credits and billing"
+description: "How prepaid credit works: read your balance and transactions, buy credit through checkout, open the billing portal, and what a run is charged."
+icon: "wallet"
+keywords: ["billing", "credits", "balance", "checkout", "billing portal", "transactions", "micro-USD", "sign-up credit"]
+---
+
+OpenType is prepaid. Your organization holds a credit balance, and every run draws its cost from it. This page is for whoever keeps that balance funded: it covers the four billing routes you call, the fields they return, how buying credit works end to end, and exactly what a run is charged. To manage billing by hand instead, use the [Billing page in the console](/console/billing), which does the same without code.
+
+## How credit works
+
+- **Every amount is an integer in micro-USD.** 1,000,000 micros is 1 US dollar and 10,000 micros is 1 cent. `balance_micros` and a transaction's `amount_micros` are signed; every other amount is unsigned.
+- **Your balance is credited minus spent minus held.** Purchases and grants add to it, usage takes from it, and every run in flight holds its spend ceiling, at most 5,000 micros ($0.005), until it settles.
+- **A run needs 5,000 micros of available credit to start.** It holds that whole ceiling while it runs, then settles at its real cost, which is usually far lower. If the balance after the hold would go below zero, the run is refused with [`402 insufficient_credits`](/guides/handling-insufficient-credits).
+- **New accounts start with $5 of credit** (5,000,000 micros), granted once the email address is verified. There is one grant per email address. See [Create an account](/getting-started/create-an-account).
+
+For a sense of scale: a decision run that reads 412 input tokens and writes 23 output tokens costs 19 micros at Neon 1.1 prices, so $5 covers a little over 260,000 runs of that size. See [Models and pricing](/getting-started/models-and-pricing) for the price and the rounding rule.
+
+## Routes and who can call them
+
+| Route | Scope | Does |
+| --- | --- | --- |
+| `GET /v1/billing` | `billing_read` | Balance, auto-recharge settings, payment-method flag and the last 50 transactions |
+| `POST /v1/billing/checkout` | `billing_write` | Starts a Stripe-hosted checkout to buy credit and returns its URL |
+| `POST /v1/billing/portal` | `billing_write` | Returns a Stripe billing portal URL for saved cards, receipts and invoices |
+| `PUT /v1/billing/auto-recharge` | `billing_write` | Turns [auto-recharge](/guides/auto-recharge) on or off and sets its threshold and amount |
+
+Which roles hold the two billing scopes:
+
+| Role | `billing_read` | `billing_write` |
+| --- | --- | --- |
+| `owner` | yes | yes |
+| `admin` | yes | yes |
+| `billing` | yes | yes |
+| `member` | yes | no |
+| `viewer` | yes | no |
+
+A key can only hold scopes its creator holds, so only an owner, admin or billing user can create a key with `billing_write`. A key that only sends runs needs neither billing scope. See [Scopes and roles](/security/scopes-and-roles).
+
+## Read your balance
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/billing \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/billing", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+if (!res.ok) throw new Error(`billing read failed: ${res.status}`);
+const billing = await res.json();
+console.log(`balance: $${(billing.balance_micros / 1_000_000).toFixed(6)}`);
+```
+
+```python Python
+import os
+import requests
+
+res = requests.get(
+    "https://api.opentype.dev/v1/billing",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+res.raise_for_status()
+billing = res.json()
+print(f"balance: ${billing['balance_micros'] / 1_000_000:.6f}")
+```
+
+</CodeGroup>
+
+```json
+{
+  "organization_id": "org_example",
+  "balance_micros": 24981000,
+  "currency": "usd",
+  "auto_recharge": {"enabled": true, "threshold_micros": 5000000, "amount_micros": 20000000},
+  "has_payment_method": true,
+  "transactions": [
+    {"id": "txn_usage_20260924", "kind": "usage", "amount_micros": -19000,
+     "description": "Usage on 2026-09-24", "created_at": "2026-09-24T00:00:00Z"},
+    {"id": "txn_5dc319db99f644e8b8f55ce6b7f55fed", "kind": "purchase", "amount_micros": 25000000,
+     "description": "Credit purchase", "created_at": "2026-09-20T14:02:11Z"}
+  ]
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `organization_id` | string | The organization the credential belongs to |
+| `balance_micros` | signed integer | Credited minus spent minus held. Holds of runs in flight are already subtracted. |
+| `currency` | string | Always `"usd"` |
+| `auto_recharge` | object | `enabled` (boolean), `threshold_micros` and `amount_micros` (integers, or `null` when never set) |
+| `has_payment_method` | boolean | Whether a card is saved. Auto-recharge needs one. |
+| `transactions` | array | The last 50 transactions, newest first. The count is fixed and there is no paging. |
+
+Each transaction has `id`, `kind`, `amount_micros` (signed: credit is positive, usage is negative), `description` and `created_at`.
+
+| `kind` | What it records |
+| --- | --- |
+| `purchase` | Credit you paid for. The description is `Credit purchase` for a checkout and `Auto-recharge` for an automatic top-up. |
+| `grant` | Credit added without a payment |
+| `usage` | One row per UTC day, id `txn_usage_YYYYMMDD`, description `Usage on YYYY-MM-DD`, a negative amount, and `created_at` at 00:00:00Z of that day |
+| `refund` | A refund recorded against the balance |
+| `adjustment` | A correction to the balance |
+
+Transaction ids are `txn_` plus 32 hex characters, except daily usage rows. Timestamps are UTC, in exactly `YYYY-MM-DDTHH:MM:SSZ` form. For spend older than the last 50 rows, read [usage reporting](/guides/usage-reporting) instead.
+
+## Buy credit
+
+`POST /v1/billing/checkout` takes the amount to buy and returns a Stripe-hosted checkout page. The credit is not added by this call: it arrives after the payment succeeds.
+
+| Rule | Value |
+| --- | --- |
+| Body | `{"amount_micros": integer}`, no other fields |
+| Minimum | 5,000,000 micros ($5) |
+| Maximum | 1,000,000,000 micros ($1,000) |
+| Granularity | Whole cents: a multiple of 10,000 micros |
+| Success status | `200`, with `{"checkout_url": string}` |
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/billing/checkout \
+  -X POST \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"amount_micros": 25000000}'
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/billing/checkout", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ amount_micros: 25_000_000 }), // $25
+});
+if (!res.ok) throw new Error(`checkout failed: ${res.status} ${await res.text()}`);
+const { checkout_url } = await res.json();
+console.log("Open this page to pay:", checkout_url);
+```
+
+```python Python
+import os
+import requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/billing/checkout",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    json={"amount_micros": 25_000_000},  # $25
+    timeout=30,
+)
+res.raise_for_status()
+print("Open this page to pay:", res.json()["checkout_url"])
+```
+
+</CodeGroup>
+
+```json
+{"checkout_url": "<Stripe-hosted checkout URL>"}
+```
+
+What happens next:
+
+<Steps>
+  <Step title="Pay on the checkout page">
+    Open `checkout_url` in a browser. The line item reads `OpenType credits`. Paying also saves the card, which is what [auto-recharge](/guides/auto-recharge) charges later.
+  </Step>
+  <Step title="Return to the console">
+    Whether you pay or cancel, the checkout page sends you back to the console's Billing page.
+  </Step>
+  <Step title="Wait for the credit">
+    The credit lands once the payment succeeds, as a `purchase` transaction with the description `Credit purchase`. Poll `GET /v1/billing` until it appears.
+  </Step>
+</Steps>
+
+A payment is credited exactly once, even if the payment confirmation arrives more than once.
+
+### Wait for a purchase to land
+
+Record the newest transaction id before you open checkout, then poll until a new `purchase` row appears.
+
+<CodeGroup>
+
+```bash curl
+# Run after paying; prints the purchase rows at the top of the list.
+curl -sS https://api.opentype.dev/v1/billing \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  | jq '[.transactions[] | select(.kind == "purchase")][0]'
+```
+
+```ts TypeScript
+const API = "https://api.opentype.dev";
+const headers = { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` };
+
+async function readBilling() {
+  const res = await fetch(`${API}/v1/billing`, { headers });
+  if (!res.ok) throw new Error(`billing read failed: ${res.status}`);
+  return res.json();
+}
+
+// Call before sending the user to checkout_url.
+const seen = new Set((await readBilling()).transactions.map((t: { id: string }) => t.id));
+
+// Then wait up to 10 minutes for the purchase.
+async function waitForPurchase(timeoutMs = 10 * 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const billing = await readBilling();
+    const bought = billing.transactions.find(
+      (t: { id: string; kind: string }) => t.kind === "purchase" && !seen.has(t.id),
+    );
+    if (bought) return billing.balance_micros;
+    await new Promise((r) => setTimeout(r, 5_000));
+  }
+  throw new Error("no purchase recorded yet; check the console Billing page");
+}
+```
+
+```python Python
+import os
+import time
+import requests
+
+API = "https://api.opentype.dev"
+HEADERS = {"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"}
+
+def read_billing():
+    res = requests.get(f"{API}/v1/billing", headers=HEADERS, timeout=30)
+    res.raise_for_status()
+    return res.json()
+
+# Call before sending the user to checkout_url.
+seen = {t["id"] for t in read_billing()["transactions"]}
+
+def wait_for_purchase(timeout_s=600):
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        billing = read_billing()
+        if any(t["kind"] == "purchase" and t["id"] not in seen for t in billing["transactions"]):
+            return billing["balance_micros"]
+        time.sleep(5)
+    raise TimeoutError("no purchase recorded yet; check the console Billing page")
+```
+
+</CodeGroup>
+
+## Cards, receipts and invoices
+
+`POST /v1/billing/portal` takes no body and returns `{"portal_url": string}`, a Stripe billing portal where you add or change the saved card and download receipts and invoices. Leaving the portal returns you to the console's Billing page. Add a card here if `has_payment_method` is `false` and you want [auto-recharge](/guides/auto-recharge) without buying credit first.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/billing/portal \
+  -X POST \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/billing/portal", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` },
+});
+if (!res.ok) throw new Error(`portal failed: ${res.status}`);
+const { portal_url } = await res.json();
+```
+
+```python Python
+import os
+import requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/billing/portal",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},
+    timeout=30,
+)
+res.raise_for_status()
+portal_url = res.json()["portal_url"]
+```
+
+</CodeGroup>
+
+## What a run is charged
+
+- **A completed run** is charged its settled `cost_micros`: input and output tokens are each priced and rounded up to a whole micro separately, then summed.
+- **A replay** of an `Idempotency-Key` is never charged again. See [Idempotency](/guides/idempotency).
+- **A refusal before any model call is free**: every `400`, `402`, `409`, `413` and `429`, and every `503` or `504` raised before a model answered. The run's hold is released.
+- **A run that fails after the model answered** is charged for what the model consumed, for example `503 provider_malformed_response`.
+- **The hold is not a charge.** The 5,000 micros held while a run is in flight return to the balance when it settles; only the settled cost is spent.
+
+Your daily `usage` transaction records those charges for one UTC day. `GET /v1/usage/ledger` lists every charged model call, one row each. See [Usage reporting](/guides/usage-reporting).
+
+## Errors
+
+Billing errors use the envelope `{"error":{"code","message","request_id"}}`. The scope is checked before billing availability, so a key without the scope gets `403` even where billing is off.
+
+| Status | Code | When | What to do |
+| --- | --- | --- | --- |
+| `400` | [`invalid_amount`](/problems/invalid_amount) | `amount_micros must be between 5000000 and 1000000000`, or `amount_micros must be a whole number of cents` | Send $5 to $1,000 in a multiple of 10,000 micros |
+| `401` | [`missing_credentials`](/problems/missing_credentials), [`invalid_credential`](/problems/invalid_credential) | No bearer, or a wrong, unknown or revoked key | Check the key |
+| `403` | [`scope_denied`](/problems/scope_denied) | The key lacks `billing_read` or `billing_write` | Use a key with the scope |
+| `503` | [`billing_not_configured`](/problems/billing_not_configured) | Billing is not switched on for this deployment | Retry later |
+| `503` | [`stripe_unavailable`](/problems/stripe_unavailable) | The payment provider did not answer on checkout or portal | Retry with backoff |
+| `503` | [`database_unavailable`](/problems/database_unavailable) | Storage is unreachable | Retry with backoff |
+
+A malformed JSON body, a missing `Content-Type`, or an unknown field such as `{"amount": 25}` is refused before these checks with a plain-text `400`, `415` or `422` that has no `request_id` in the body. Fall back to the HTTP status and the `x-request-id` response header. See [Error handling](/guides/error-handling).
+
+## Related
+
+- [Auto-recharge](/guides/auto-recharge) - top up automatically when the balance runs low.
+- [Handling insufficient credits](/guides/handling-insufficient-credits) - what to do when a run gets `402`.
+- [Billing in the console](/console/billing) - buy credit and change auto-recharge without code.
+- [Models and pricing](/getting-started/models-and-pricing) - the Neon 1.1 price and how a cost is rounded.
+- [Usage reporting](/guides/usage-reporting) - spend per day, per run and per model call.

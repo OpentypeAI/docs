@@ -1,0 +1,96 @@
+---
+title: "auth_not_configured"
+description: "HTTP 503 on any protected route: the service has no verifier for this kind of credential. Check your key starts with otsk_, then retry later."
+icon: "id-card"
+keywords: ["auth_not_configured", "503", "authentication", "credential", "otsk_", "bearer", "API key"]
+---
+
+`auth_not_configured` means the service cannot check the kind of credential you sent. Read this page when every call answers with this code, and to rule out a wrong value in your `Authorization` header.
+
+| HTTP | `code` | Retryable |
+| --- | --- | --- |
+| `503` | `auth_not_configured` | Later, after you confirm your credential is an API key. |
+
+## What happened
+
+Routes: every protected `/v1/*` route.
+
+OpenType reads the credential in `Authorization: Bearer <credential>` by its prefix:
+
+| Credential | Checked as |
+| --- | --- |
+| starts with `otsk_` | an API key |
+| anything else | a console session token |
+
+This code means no verifier is configured for the credential you sent. That happens when:
+
+- the value does not start with `otsk_`, so it is treated as a console session token, and the service is not set up to check session tokens;
+- the service has neither of its verifiers configured, in which case every credential gets this code.
+
+The request was refused before any work was done. Nothing was stored or charged.
+
+## How to fix
+
+1. **Check the header.** It must be `Authorization: Bearer otsk_...`, with the whole secret: `otsk_` followed by 64 lowercase hex characters. A key id (`key_...`), a truncated secret or a stray quote is not a key.
+2. **Check the environment variable.** `echo ${OPENTYPE_API_KEY:0:5}` should print `otsk_`.
+3. If the credential is a valid `otsk_` key, the problem is on the service side. Retry later and report the `request_id` if it persists.
+
+## Example
+
+```json
+{"error":{"code":"auth_not_configured","message":"the identity provider is not configured","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+```
+
+Checking the credential shape before the first call:
+
+<CodeGroup>
+```bash curl
+case "$OPENTYPE_API_KEY" in
+  otsk_*) curl -sS https://api.opentype.dev/v1/quota -H "Authorization: Bearer $OPENTYPE_API_KEY" ;;
+  *) echo "OPENTYPE_API_KEY is not an API key secret (it must start with otsk_)" >&2 ;;
+esac
+```
+
+```typescript TypeScript
+const key = process.env.OPENTYPE_API_KEY ?? "";
+if (!/^otsk_[0-9a-f]{64}$/.test(key)) {
+  throw new Error("OPENTYPE_API_KEY is not an API key secret (otsk_ + 64 hex)");
+}
+
+const res = await fetch("https://api.opentype.dev/v1/quota", {
+  headers: { Authorization: `Bearer ${key}` },
+});
+const data = await res.json();
+if (data.error?.code === "auth_not_configured") {
+  console.error(`service-side: retry later (${data.error.request_id})`);
+}
+```
+
+```python Python
+import os
+import re
+
+import requests
+
+key = os.environ.get("OPENTYPE_API_KEY", "")
+if not re.fullmatch(r"otsk_[0-9a-f]{64}", key):
+    raise SystemExit("OPENTYPE_API_KEY is not an API key secret (otsk_ + 64 hex)")
+
+resp = requests.get(
+    "https://api.opentype.dev/v1/quota",
+    headers={"Authorization": f"Bearer {key}"},
+    timeout=30,
+)
+err = resp.json().get("error", {})
+if err.get("code") == "auth_not_configured":
+    print(f"service-side: retry later ({err['request_id']})")
+```
+</CodeGroup>
+
+## Related
+
+- [Authentication](/security/authentication) - how to send a credential and how it is checked.
+- [API keys](/console/api-keys) - create a key and copy its secret.
+- [invalid_credential](/problems/invalid_credential) - the 401 for a key that is malformed, unknown or revoked.
+- [Error handling](/guides/error-handling) - a status-to-action table and a retry helper for every error.
+- [Problem codes](/problems) - every code, its status, and whether a retry can help.

@@ -1,0 +1,216 @@
+---
+title: "Idempotency"
+description: "Every POST /v1/runs carries an Idempotency-Key. How replays, conflicts and pending runs work, and when to reuse a key or mint a new one."
+icon: "fingerprint"
+keywords: ["idempotency", "Idempotency-Key", "replay", "replayed", "retry", "idempotency_conflict", "202", "duplicate runs"]
+---
+
+`POST /v1/runs` requires an `Idempotency-Key` header, so a retry of the same request returns the stored run instead of running and charging it twice. Read this page before you write retry logic, queue workers or anything else that can send the same run more than once.
+
+## The header
+
+| Rule | Value |
+| --- | --- |
+| Header | `Idempotency-Key`, on `POST /v1/runs` only |
+| Length | 1 to 255 bytes |
+| Characters | visible header text |
+| Scope | unique per organization: every API key in the organization shares the same key space |
+| Lifetime | never expires |
+
+A missing header is refused with [`400 idempotency_key_required`](/problems/idempotency_key_required). An empty or overlong value, or one that is not valid header text, is refused with [`400 invalid_idempotency_key`](/problems/invalid_idempotency_key).
+
+## What makes two requests "the same"
+
+OpenType stores a digest of each run's input next to its key. Two requests with the same key count as the same request when these parts match:
+
+| Part of the identity | Verdict run | Decision run |
+| --- | --- | --- |
+| The input | `system` and `messages` | `state` |
+| The kind | `kind` | `kind` |
+| The contract | `schema` | `instructions`, `questions`, `draws`, `think_tokens` |
+
+These fields are **not** part of the identity: `max_output_tokens`, `deadline_ms` and `capability_hint`. A second request that changes only one of them, with the same key, replays the first run. It does not run again with the new setting. Use a new key when you change them on purpose.
+
+## What you get back
+
+| You send | The stored run is | Status | Body |
+| --- | --- | --- | --- |
+| A key never used in your organization | (none) | `200`, or an error | A new run, settled |
+| The same key and the same identity | `completed` | `200` | The stored run with `"replayed": true` and its answer |
+| The same key and the same identity | `failed` | `200` | The stored run with `"state": "failed"` and `"replayed": true` |
+| The same key and the same identity | `pending` | `202` | The stored run as it is, with `"replayed": true` |
+| The same key and a different identity | any | `409` | [`idempotency_conflict`](/problems/idempotency_conflict) |
+
+- **A replay is never charged again.** It makes no model call.
+- **A replay skips the quota and credit checks.** A key that already owns a run is never refused with `402` or `429`.
+- **A replay is thinner than the live response.** It has the same shape as [`GET /v1/runs/{run_id}`](/guides/polling): no `cost_basis`, no `schema_enforcement`, and a decision without `model`, `stages` or the thought fields.
+- **A failed run replays as `200`.** Check `state`, not only the HTTP status.
+
+A replay of a completed decision run:
+
+```json
+{
+  "run_id": "run_a4314b6cc08f4bd8814099a613abeb44",
+  "kind": "decision",
+  "state": "completed",
+  "input_digest": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+  "output_digest": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+  "decision": {
+    "answers": {
+      "urgent": {"answered_within_labels": true, "label_mass": 0.991, "probability": 0.83, "type": "noul"}
+    },
+    "draws": 1,
+    "read": "slot_constrained"
+  },
+  "usage": {"input_tokens": 412, "output_tokens": 23},
+  "cost_micros": 19,
+  "replayed": true
+}
+```
+
+A replay that answers `202` because the stored run is still `pending`:
+
+```json
+{
+  "run_id": "run_a4314b6cc08f4bd8814099a613abeb44",
+  "kind": "decision",
+  "state": "pending",
+  "input_digest": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+  "replayed": true
+}
+```
+
+A `202` has two causes. Either the first request is still being served, or the run failed before a model call and will stay `pending` for good. [Polling](/guides/polling) explains how to tell them apart.
+
+## Choose a key per logical request
+
+Derive the key from your own business id and the question you ask, not from the HTTP attempt:
+
+- **Good:** `ticket-4822-triage`. The same ticket and the same question always give the same key, so a worker that crashes and restarts sends the same key again and gets the stored run.
+- **Good:** a UUID that you generate once, store with the job, and send on every attempt of that job.
+- **Bad:** a fresh UUID per HTTP call. Every retry becomes a new run and a new charge.
+
+Rules that follow from the key never expiring and being shared across the organization:
+
+- **Prefix keys per service**, for example `support-bot:ticket-4822-triage`, so two services in one organization cannot collide.
+- **Version the key when the request changes on purpose.** If you edit the question set for ticket 4822, send `ticket-4822-triage-v2`. The old key still belongs to the old body and answers `409` to the new one.
+- **Keep keys well under 255 bytes** if your retry logic appends a suffix, as the helper in [Error handling](/guides/error-handling) does.
+
+## Reuse the key or mint a new one
+
+The rule depends on whether the failed request left a run behind.
+
+| What happened | A run was stored? | Next request |
+| --- | --- | --- |
+| No response: client timeout or dropped connection | Maybe | **Same key, same body.** You get the finished run, a `202`, or a first run if the request never arrived. |
+| `400`, `401`, `402`, `403`, `413 body_too_large` or `429` | No | Fix the cause, then send it again. The same key is still free. |
+| `413 input_too_large` | Maybe: the input can be refused before admission, or later when it does not fit the model's context | Shrink the input and send it with a **new key**. |
+| `409 idempotency_conflict` | Yes, with another body | Send the original body with this key, or use a new key for the new body. |
+| `500`, `503` or `504` | Possibly, and it will not finish | **New key.** The same key would replay the failure. |
+| `200` with `"state": "failed"` | Yes, failed | **New key**, after you have read why it failed. |
+| `202` that stays `pending` past the run's deadline | Yes, stuck in `pending` | **New key.** |
+
+A `5xx` may come after the run was stored. A run that failed after a model call settles as `failed` and replays as `200` with `"state": "failed"`. A run that failed before a model call stays `pending` and replays as `202` indefinitely. Neither runs again under the same key, so a new key is the only way to try again.
+
+## Example
+
+This sends a triage run keyed on the ticket id and handles each outcome.
+
+<CodeGroup>
+
+```bash cURL
+curl -sS -i https://api.opentype.dev/v1/runs \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: support-bot:ticket-4822-triage" \
+  -d '{
+    "kind": "decision",
+    "state": {"ticket": "I was charged twice this month and nobody answers my emails."},
+    "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+    "max_output_tokens": 16
+  }'
+# Send the same command again: the second response is the stored run with "replayed": true.
+```
+
+```ts TypeScript
+type Run = { run_id: string; state: "pending" | "completed" | "failed"; replayed: boolean; [k: string]: unknown };
+
+async function triage(ticketId: string, text: string): Promise<Run> {
+  const res = await fetch("https://api.opentype.dev/v1/runs", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+      "Content-Type": "application/json",
+      // Derived from the business id: every attempt for this ticket sends the same key.
+      "Idempotency-Key": `support-bot:ticket-${ticketId}-triage`,
+    },
+    body: JSON.stringify({
+      kind: "decision",
+      state: { ticket: text },
+      questions: { urgent: { type: "noul", instructions: "reply within the hour?" } },
+      max_output_tokens: 16,
+    }),
+    signal: AbortSignal.timeout(130_000), // above the 120 s maximum deadline
+  });
+  const body = await res.json();
+  if (res.status === 409) {
+    // This key already belongs to a different body. Version the key if the change is intended.
+    throw new Error(`key reused with another body (${body.error.request_id})`);
+  }
+  if (!res.ok) throw new Error(`${res.status} ${body.error.code} (${body.error.request_id})`);
+  // 200 completed, 200 failed (a replay of a failed run), or 202 pending: check state.
+  return body as Run;
+}
+```
+
+```python Python
+import os
+import requests
+
+def triage(ticket_id: str, text: str) -> dict:
+    res = requests.post(
+        "https://api.opentype.dev/v1/runs",
+        headers={
+            "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+            "Content-Type": "application/json",
+            # Derived from the business id: every attempt for this ticket sends the same key.
+            "Idempotency-Key": f"support-bot:ticket-{ticket_id}-triage",
+        },
+        json={
+            "kind": "decision",
+            "state": {"ticket": text},
+            "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
+            "max_output_tokens": 16,
+        },
+        timeout=130,  # above the 120 s maximum deadline
+    )
+    body = res.json()
+    if res.status_code == 409:
+        # This key already belongs to a different body. Version the key if the change is intended.
+        raise RuntimeError(f"key reused with another body ({body['error']['request_id']})")
+    if not res.ok:
+        raise RuntimeError(f"{res.status_code} {body['error']['code']} ({body['error']['request_id']})")
+    # 200 completed, 200 failed (a replay of a failed run), or 202 pending: check state.
+    return body
+```
+
+</CodeGroup>
+
+## What goes wrong
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `409 idempotency_conflict` on a retry you believe is identical | Something in the identity changed: a timestamp in `state`, a reordered or edited question, a new `schema` | Build the body once, store it with the key, and resend the stored body. |
+| A changed `max_output_tokens` or `deadline_ms` has no effect | Those fields are not part of the identity, so the request replayed the first run | Use a new key. |
+| Every retry is charged | A new key per HTTP attempt | Derive the key from the business id. |
+| `202` on every retry | The run failed before a model call and stays `pending` | Send the request with a new key. |
+| `200` but no answer | A replay of a failed run: `"state": "failed"` | Read `state`, then retry with a new key. |
+| `409` after you shrank an input that got `413 input_too_large` | The first request was admitted before it was refused, so the key already owns a run | Send the smaller input with a new key. |
+
+## Related
+
+- [Error handling](/guides/error-handling) - which statuses to retry, with a helper that moves to a new key after a `5xx`.
+- [Polling](/guides/polling) - recover a run after a client timeout and tell a slow run from a stuck one.
+- [idempotency_conflict](/problems/idempotency_conflict) - the same key sent with a different body.
+- [Runs](/getting-started/runs) - the run lifecycle and what a run returns.
+- [API reference](/api-reference/introduction) - the full `POST /v1/runs` contract.
