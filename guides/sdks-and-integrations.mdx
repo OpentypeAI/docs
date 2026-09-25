@@ -1,0 +1,92 @@
+---
+title: "SDKs and integrations"
+sidebarTitle: "SDKs and integrations"
+description: "The official TypeScript and Python SDKs, the MCP server for coding agents and the Claude Code plugin: what each one is and how to install it today."
+icon: "puzzle-piece"
+keywords: ["SDK", "TypeScript", "Python", "MCP", "Claude Code", "Codex", "Cursor", "OpenCode", "install"]
+---
+
+This page lists the official client libraries and agent integrations, and how to install each one. Use it when you would rather call OpenType from a typed client or a coding agent than write the HTTP requests in [Code examples](/guides/code-examples) yourself.
+
+The packages are not on npm or PyPI yet. Until their first release, install them from their GitHub repositories as shown below.
+
+## What is available
+
+| Package | What it is | Source |
+| --- | --- | --- |
+| `@opentype/sdk` | TypeScript client for Node.js 18 or later: decisions, verdicts, runs, usage and the Model Router | [opentype-js](https://github.com/OpentypeAI/opentype-js) |
+| `@opentype/mcp` | MCP server that gives coding agents six tools: decide, verdict, route a model, list models, read a run, read usage | [opentype-js](https://github.com/OpentypeAI/opentype-js) |
+| `opentype` | Python client for Python 3.9 or later, sync and async | [opentype-python](https://github.com/OpentypeAI/opentype-python) |
+| Claude Code plugin | The MCP server plus skills and slash commands for Claude Code, with configs for Codex, Cursor, VS Code and OpenCode | [opentype-claude-plugin](https://github.com/OpentypeAI/opentype-claude-plugin) |
+
+Every client reads your key from `OPENTYPE_API_KEY`. Create one in [API keys](/console/api-keys).
+
+## Install the Python SDK
+
+```bash
+pip install git+https://github.com/OpentypeAI/opentype-python
+```
+
+```python
+from opentype import OpenType
+
+client = OpenType()  # reads OPENTYPE_API_KEY
+run = client.decide(
+    state="Refund me today or I dispute the charge.",
+    questions={"escalate": {"type": "noul", "instructions": "Is the customer threatening to escalate?"}},
+    idempotency_key="ticket-4822-triage",
+)
+print(run.decision.answers)
+```
+
+## Install the TypeScript SDK
+
+Build the package from its repository, then install the packed tarball in your project:
+
+```bash
+git clone https://github.com/OpentypeAI/opentype-js
+cd opentype-js
+pnpm install && pnpm build
+(cd packages/sdk && pnpm pack --pack-destination ../../dist)
+```
+
+```bash
+npm install /path/to/opentype-js/dist/opentype-sdk-0.1.0.tgz
+```
+
+```ts
+import { OpenType } from "@opentype/sdk";
+
+const ot = new OpenType(); // reads OPENTYPE_API_KEY
+const d = await ot.decide({
+  prompt: "Refund me today or I dispute the charge.",
+  question: "Is the customer threatening to escalate?",
+  idempotencyKey: "ticket-4822-triage",
+});
+console.log(d.answer);
+```
+
+## Add OpenType to a coding agent
+
+Build `opentype-js` as above, then register its MCP server. For Claude Code:
+
+```bash
+claude mcp add opentype --scope user -e OPENTYPE_API_KEY=otsk_... -- node /path/to/opentype-js/packages/mcp/dist/bin.js
+```
+
+The [Claude Code plugin](https://github.com/OpentypeAI/opentype-claude-plugin) adds skills and slash commands on top, and its `other-agents` folder has the same server configured for Codex, Cursor, VS Code and OpenCode. The decide, verdict and route tools spend credit; the other three are free.
+
+## Retries and idempotency in the SDKs
+
+- Every paid call, a run or a Model Router selection, sends an `Idempotency-Key`: yours if you pass one, otherwise a new random key per call.
+- When no response arrives, the SDK sends the request again with the **same** key, so the retry replays the stored run instead of paying twice.
+- A `5xx` on a paid call is not retried: the run may already have been charged. Read it back, or send the request again with a new key if you want a new attempt.
+- Reads are retried on `5xx` and network errors. A `4xx` is never retried.
+- The default client timeout is 170 seconds, above the longest run deadline.
+
+## Related
+
+- [Code examples](/guides/code-examples) - complete clients without an SDK, in curl, TypeScript and Python.
+- [Idempotency](/guides/idempotency) - when to reuse a key and when to send a new one.
+- [Error handling](/guides/error-handling) - what each status means and how to react.
+- [Model Router](/guides/model-router) - what the route tool and `router.select` return.
