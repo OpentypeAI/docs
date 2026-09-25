@@ -71,7 +71,7 @@ A decision run can carry up to 262,144 input tokens (256k) in a body of up to 4 
 
 The default is `30,000 + 120,000 × input_tokens / 262,144` milliseconds, clamped to 150,000. You can send a shorter `deadline_ms`, or a longer one up to 150,000. Verdict runs keep their own range: default 30,000, at most 120,000.
 
-Set your HTTP client timeout to at least **160 seconds**, above the longest deadline, so the server rather than your client ends a slow run and you receive the `504 deadline_exceeded` with its `request_id`. The official SDKs default to 160 seconds.
+Set your HTTP client timeout to at least **160 seconds**, above the longest deadline, so the server rather than your client ends a slow run and you receive the `504 deadline_exceeded` with its `request_id`. The official SDKs default to 170 seconds.
 
 A long input is priced like any other, per token: a full 262,144-token read with 16 output tokens costs 11,012 micro-USD, within the 20,000 micro-USD per-run ceiling. See [Models and pricing](/getting-started/models-and-pricing).
 

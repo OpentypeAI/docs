@@ -216,7 +216,7 @@ A selection is billed as one decision run on Neon 1.1: the same admission, credi
 
 The router accepts long tasks: a request body of up to 4 MiB, which holds a task of 256k tokens or more. Neon 1.1 classifies the task from its head and tail, at most about 1,500 tokens, so a long task costs no more to classify than a short one and the selection finishes within the default 30-second decision deadline. `input_tokens_est` and every `estimated_cost_usd` and `estimated_latency_ms` still count the whole task, and `min_context_tokens` lets you require a context window large enough for it.
 
-Set your HTTP client timeout to at least **160 seconds**, the same as for decision runs, so the server, not your client, ends a slow request. The official SDKs default to that. A selection that runs out of time is `504 deadline_exceeded`. When you then send a long task to Neon 1.1 as a decision run, its deadline grows with the input; see [Limits](/reference/limits#long-context-decisions).
+Set your HTTP client timeout to at least **160 seconds**, the same as for decision runs, so the server, not your client, ends a slow request. The official SDKs default to 170 seconds. A selection that runs out of time is `504 deadline_exceeded`. When you then send a long task to Neon 1.1 as a decision run, its deadline grows with the input; see [Limits](/reference/limits#long-context-decisions).
 
 ## Errors
 

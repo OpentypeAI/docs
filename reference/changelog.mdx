@@ -18,7 +18,7 @@ This page records changes to the OpenType API contract and to what an account ca
 
 - **256k-token decisions.** A Neon 1.1 decision reads up to 262,144 input tokens, up from 3,968. See [Limits](/reference/limits#long-context-decisions).
 - **4 MiB bodies** on `POST /v1/runs` and `POST /v1/router/select`, up from 1 MiB. Other routes keep 1 MiB.
-- **Decision deadlines scale with input.** The default is 30 seconds plus 120 seconds per 262,144 input tokens, at most 150 seconds. Set client timeouts to at least 160 seconds; the official SDKs default to that.
+- **Decision deadlines scale with input.** The default is 30 seconds plus 120 seconds per 262,144 input tokens, at most 150 seconds. Set client timeouts to at least 160 seconds; the official SDKs default to 170 seconds.
 - **Per-run spend ceiling raised to 20,000 micro-USD** (\$0.02), from 5,000, so a full 256k-token read fits. A run holds its ceiling while in flight.
 - **`Server-Timing` on `POST /v1/runs`.** Reports `admit`, `upstream`, `gateway` and `total` time in milliseconds. See [Limits](/reference/limits#response-timing).
 
