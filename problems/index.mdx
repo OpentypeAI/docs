@@ -72,7 +72,7 @@ A few rejections arrive as plain text with no `code` at all (400, 404, 405, 413,
 
 | Code | HTTP | Retryable | Meaning |
 | --- | --- | --- | --- |
-| [`insufficient_credits`](/problems/insufficient_credits) | 402 | after top-up | the balance cannot cover the run's spend hold, up to 5,000 micros |
+| [`insufficient_credits`](/problems/insufficient_credits) | 402 | after top-up | the balance cannot cover the run's spend hold, up to 20,000 micros |
 | [`organization_spend_quota_exhausted`](/problems/organization_spend_quota_exhausted) | 429 | later | the per-request ceiling exceeds what is left of the period spend limit |
 | [`organization_token_quota_exhausted`](/problems/organization_token_quota_exhausted) | 429 | later | the estimated input plus `max_output_tokens` exceeds the tokens left this period |
 
@@ -89,8 +89,8 @@ A few rejections arrive as plain text with no `code` at all (400, 404, 405, 413,
 
 | Code | HTTP | Retryable | Meaning |
 | --- | --- | --- | --- |
-| [`body_too_large`](/problems/body_too_large) | 413 | no | the run body is over 1 MiB |
-| [`input_too_large`](/problems/input_too_large) | 413 | no | the input is over 64,000 estimated tokens, or too large for Neon 1.1 |
+| [`body_too_large`](/problems/body_too_large) | 413 | no | the body is over 4 MiB |
+| [`input_too_large`](/problems/input_too_large) | 413 | no | the input is over 262,144 estimated tokens for a decision, or 64,000 for a verdict |
 
 ### Run execution errors (500, 503, 504)
 

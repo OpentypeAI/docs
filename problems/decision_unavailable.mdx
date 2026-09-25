@@ -110,7 +110,7 @@ def create_run_with_retry(payload: dict, max_attempts: int = 4) -> dict:
                 "Idempotency-Key": str(uuid.uuid4()),
             },
             json=payload,
-            timeout=130,  # longer than the largest deadline_ms (120,000 ms)
+            timeout=160,  # longer than the largest deadline (150,000 ms)
         )
         data = resp.json()
         if resp.ok:

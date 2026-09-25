@@ -7,6 +7,23 @@ keywords: ["changelog", "release notes", "api changes", "what is new", "neon 1.1
 
 This page records changes to the OpenType API contract and to what an account can do, newest first. Read it when you upgrade a client or when a response differs from what you remember. Each entry links to the page that explains the change in full.
 
+<Update label="2026-09-25" description="Model Router, 256k-token decisions, and response timing">
+
+### Model Router
+
+- **`POST /v1/router/select`.** Classifies a task with Neon 1.1 into one of 27 task types and ranks the models of a benchmark catalog for it, under one of four policies: `balanced`, `cost_efficient`, `capability_heavy` or `domain_skills`. Billed as one decision run; `Idempotency-Key` is optional. See [Model Router](/guides/model-router).
+- **`GET /v1/router/task-types`** and **`GET /v1/router/models`.** The task taxonomy with each type's benchmark weights, and the catalog the router selects from. See [Task types and policies](/guides/router-task-types).
+
+### Runs
+
+- **256k-token decisions.** A Neon 1.1 decision reads up to 262,144 input tokens, up from 3,968. See [Limits](/reference/limits#long-context-decisions).
+- **4 MiB bodies** on `POST /v1/runs` and `POST /v1/router/select`, up from 1 MiB. Other routes keep 1 MiB.
+- **Decision deadlines scale with input.** The default is 30 seconds plus 120 seconds per 262,144 input tokens, at most 150 seconds. Set client timeouts to at least 160 seconds; the official SDKs default to that.
+- **Per-run spend ceiling raised to 20,000 micro-USD** (\$0.02), from 5,000, so a full 256k-token read fits. A run holds its ceiling while in flight.
+- **`Server-Timing` on `POST /v1/runs`.** Reports `admit`, `upstream`, `gateway` and `total` time in milliseconds. See [Limits](/reference/limits#response-timing).
+
+</Update>
+
 <Update label="2026-09-24" description="Open sign-up, billing, daily usage, and Neon 1.1">
 
 ### Accounts and billing

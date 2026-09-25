@@ -10,9 +10,9 @@ keywords: ["polling", "poll", "GET /v1/runs/{run_id}", "timeout", "202", "pendin
 
 ## You usually do not need to poll
 
-The request waits until the run settles, then returns it with `200`. The wait is bounded by the run's `deadline_ms`: 30,000 ms by default, at most 120,000 ms. When the deadline passes, the request ends with [`504 deadline_exceeded`](/problems/deadline_exceeded).
+The request waits until the run settles, then returns it with `200`. The wait is bounded by the run's deadline: for a decision, 30,000 ms plus 120,000 ms per 262,144 input tokens by default, at most 150,000 ms. When the deadline passes, the request ends with [`504 deadline_exceeded`](/problems/deadline_exceeded).
 
-Set your HTTP client timeout **above** the deadline you send, for example 130 seconds for the maximum, and most of what this page covers never happens.
+Set your HTTP client timeout **above** the deadline you send, at least 160 seconds, and most of what this page covers never happens.
 
 ## Run states
 
@@ -105,7 +105,7 @@ If you need `cost_basis` or the decision stages, keep the original `POST` respon
 
 A `pending` run has one of two causes:
 
-1. **The first request is still being served.** It settles within its deadline, at most 120 seconds after it was sent.
+1. **The first request is still being served.** It settles within its deadline, at most 150 seconds after it was sent.
 2. **The run failed before a model call.** For example, no route was available, the deadline passed while routing, or the upstream model refused the call. Such a run is never moved out of `pending`, and the same key answers `202` with it for good.
 
 Tell them apart with the deadline: poll until the run settles or until the deadline of the original request has passed. A run still `pending` after that will not settle. Send the request again with a **new** `Idempotency-Key`. Nothing was charged for the stuck run: its reservation was released when it failed.
@@ -163,7 +163,7 @@ def wait_for_run(run_id: str, sent_at: float, deadline_ms: int = 30_000) -> dict
 
 </CodeGroup>
 
-`sent_at` is the time you sent the original `POST`. If you do not know it, use the maximum deadline, 120 seconds, from when you first saw the run.
+`sent_at` is the time you sent the original `POST`. If you do not know it, use the maximum deadline, 150 seconds, from when you first saw the run.
 
 ## Errors
 

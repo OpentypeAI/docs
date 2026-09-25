@@ -15,9 +15,9 @@ keywords: ["insufficient_credits", "402", "payment required", "credits", "balanc
 
 Route: `POST /v1/runs`.
 
-Runs are paid from prepaid credit. Before a run starts, OpenType holds the run's full per-request spend ceiling, at most 5,000 micro-USD ($0.005), against your balance until the run settles. A run that would take the available balance below zero is refused.
+Runs are paid from prepaid credit. Before a run starts, OpenType holds the run's full per-request spend ceiling, at most 20,000 micro-USD ($0.02), against your balance until the run settles. A run that would take the available balance below zero is refused.
 
-In practice, a run needs at least 5,000 micros of available credit to start, even though a typical decision run costs far less. Holds of runs still in flight count against the balance until they settle.
+In practice, a run needs at least 20,000 micros of available credit to start, even though a typical decision run costs far less. Holds of runs still in flight count against the balance until they settle.
 
 When the run is refused:
 
@@ -32,7 +32,7 @@ Every new account gets $5 of credit (5,000,000 micros) once its email address is
 1. Check the balance with `GET /v1/billing` (needs `billing_read`). `balance_micros` is credited minus spent minus held, and can be negative.
 2. Add credit: on the [Billing page](/console/billing), or with `POST /v1/billing/checkout` and an `amount_micros` from $5 to $1,000. The credit arrives once the payment succeeds.
 3. To avoid this in production, turn on [auto-recharge](/guides/auto-recharge). It tops up a saved card when the balance falls below your threshold, at most once per hour.
-4. Retry the run once `balance_micros` is at least 5,000. The first attempt was refused before a run existed, so reuse the same `Idempotency-Key`.
+4. Retry the run once `balance_micros` is at least 20,000. The first attempt was refused before a run existed, so reuse the same `Idempotency-Key`.
 
 Do not retry in a tight loop: until credit arrives, every attempt gets the same 402.
 

@@ -2,7 +2,7 @@
 title: "input_too_large"
 description: "HTTP 413 on POST /v1/runs: the estimated input is over the token ceiling, or does not fit Neon 1.1's context. How the estimate works and how to fix it."
 icon: "text-width"
-keywords: ["input_too_large", "413", "tokens", "context", "3,968 tokens", "64,000 tokens", "input estimate", "POST /v1/runs"]
+keywords: ["input_too_large", "413", "tokens", "context", "262,144 tokens", "256k", "64,000 tokens", "input estimate", "POST /v1/runs"]
 ---
 
 `input_too_large` means the input of a run is too large to process, measured in estimated tokens rather than bytes. Read this page if you send long tickets, documents or states in decision runs.
@@ -25,20 +25,20 @@ The prompt is `system` and `messages` for a verdict run, or `state` for a decisi
 
 | Where | Limit | What happened to the run | Retry with |
 | --- | --- | --- | --- |
-| Admission | the estimate is over 64,000 tokens | refused before a run existed; nothing stored or charged | the same `Idempotency-Key` |
-| Routing | the input does not fit the model's context; for Neon 1.1 decision runs, 3,968 tokens | the run was admitted, then failed before any model call; nothing charged, and the run stays `pending` | a **new** `Idempotency-Key` |
+| Admission | the estimate is over 262,144 tokens for a decision run, or over 64,000 tokens for a verdict run | refused before a run existed; nothing stored or charged | the same `Idempotency-Key` |
+| Routing | the input does not fit the chosen model's context | the run was admitted, then failed before any model call; nothing charged, and the run stays `pending` | a **new** `Idempotency-Key` |
 
-For Neon 1.1, the routing limit is the one you meet first: a decision run's input must fit in 3,968 tokens, far below the 64,000-token ceiling.
+For Neon 1.1 decision runs both limits are 262,144 tokens (256k), so the admission check is the one you meet.
 
 The admission message names the estimate, as in the example below. Branch on `code`, not on the message.
 
 ## How to fix
 
-1. Estimate before you send: count the UTF-8 bytes of the prompt and of the contract, divide each by 4 and round up. Keep a decision run's total well under 3,968 tokens.
+1. Estimate before you send: count the UTF-8 bytes of the prompt and of the contract, divide each by 4 and round up. Keep a decision run's total at or under 262,144 tokens.
 2. Send only what the questions need. Drop unused fields from `state`, strip markup and signatures, and truncate long threads to the latest messages.
 3. Shorten `instructions` and question text, or split a large question set across several runs.
 4. Retry with the right key:
-   - If the input was refused at admission (over 64,000 tokens), the key is still free; reuse it.
+   - If the input was refused at admission (over the ceiling for its kind), the key is still free; reuse it.
    - Otherwise, use a new key. A replay of the old key returns `202` with the `pending` run instead of running again.
 
 When you are unsure which case applied, use a new key. A new key never replays a stuck run.
@@ -57,11 +57,11 @@ Estimating a decision run before sending it:
 STATE_BYTES=$(jq -c . state.json | tr -d '\n' | wc -c)
 CONTRACT_BYTES=$(jq -c . contract.json | tr -d '\n' | wc -c)
 EST=$(( (STATE_BYTES + 3) / 4 + (CONTRACT_BYTES + 3) / 4 ))
-echo "estimated input: $EST tokens (decision limit 3968)"
+echo "estimated input: $EST tokens (decision limit 262144)"
 ```
 
 ```typescript TypeScript
-const DECISION_CONTEXT_TOKENS = 3968;
+const DECISION_CONTEXT_TOKENS = 262_144;
 
 const bytes = (v: unknown) =>
   new TextEncoder().encode(typeof v === "string" ? v : JSON.stringify(v)).length;
@@ -84,7 +84,7 @@ console.log(`estimated input: ${estimate} tokens`);
 import json
 import math
 
-DECISION_CONTEXT_TOKENS = 3968
+DECISION_CONTEXT_TOKENS = 262_144
 
 
 def byte_len(value) -> int:
@@ -111,5 +111,5 @@ print(f"estimated input: {estimate} tokens")
 - [Models and pricing](/getting-started/models-and-pricing) - Neon 1.1's context and prices.
 - [Limits](/reference/limits) - the token ceiling and the context limit with every other limit.
 - [Idempotency](/guides/idempotency) - why a run stuck in `pending` needs a new key.
-- [body_too_large](/problems/body_too_large) - the body is over 1 MiB before any token count.
+- [body_too_large](/problems/body_too_large) - the body is over 4 MiB before any token count.
 - [Problem codes](/problems) - every code, its status, and whether a retry can help.

@@ -10,15 +10,15 @@ keywords: ["402", "insufficient_credits", "out of credit", "balance", "top up", 
 
 ## The rule
 
-Every run holds its spend ceiling, 5,000 micros ($0.005), from admission until it settles. Before a run is admitted, the server checks:
+Every run holds its spend ceiling, 20,000 micros ($0.02), from admission until it settles. Before a run is admitted, the server checks:
 
 ```text
-available credit - 5,000 micros < 0   ->   402 insufficient_credits
+available credit - 20,000 micros < 0   ->   402 insufficient_credits
 ```
 
 Available credit is `balance_micros` from `GET /v1/billing`, which already has the holds of runs in flight subtracted. So:
 
-- **You need at least 5,000 micros available to start a run**, even when the run will cost 19 micros once it settles.
+- **You need at least 20,000 micros available to start a run**, even when the run will cost 19 micros once it settles.
 - **Concurrency counts.** Twenty runs in flight hold 100,000 micros ($0.10) between them. With $0.10 of credit and twenty runs in flight, the twenty-first run is refused even though the settled costs would be tiny.
 - **The check happens late in admission**, after the body, scope, idempotency key and quota are checked. A `402` means the request itself was valid.
 
@@ -62,7 +62,7 @@ Treat `402` as a stop signal for the whole queue, not as a per-request retry. Re
 
 1. On `402`, pause every worker that sends runs.
 2. Alert a person once, with the `request_id`.
-3. Poll the balance until at least 5,000 micros per run you plan to have in flight is available.
+3. Poll the balance until at least 20,000 micros per run you plan to have in flight is available.
 4. Resume, re-sending the refused requests with their original keys.
 
 The poll uses `GET /v1/billing`, which needs `billing_read`. Every role holds it, so create the key for this client with `runs_write` and `billing_read`, or use a second read-only key for the poll.
@@ -173,7 +173,7 @@ def send_run(idempotency_key, body):
         f"{API}/v1/runs",
         headers={**HEADERS, "Idempotency-Key": idempotency_key},
         json=body,
-        timeout=130,
+        timeout=160,
     )
     if res.status_code == 402:
         raise OutOfCredit(res.json()["error"]["request_id"])
@@ -214,7 +214,7 @@ With several workers, share one paused flag between them and call `waitForCredit
 
 - **Turn on auto-recharge** with a threshold above one charge's worth of spend and an amount above your busiest hour. See [Auto-recharge](/guides/auto-recharge#pick-the-numbers).
 - **Watch the balance.** Poll `GET /v1/billing` on a schedule and alert when `balance_micros` falls below a floor you choose, before runs start failing.
-- **Size the balance for concurrency.** Keep at least 5,000 micros per run you allow in flight.
+- **Size the balance for concurrency.** Keep at least 20,000 micros per run you allow in flight.
 
 ## 402 versus 429
 

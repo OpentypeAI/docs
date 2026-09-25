@@ -124,7 +124,7 @@ res = requests.post(
         },
         "max_output_tokens": 16,
     },
-    timeout=130,
+    timeout=160,
 )
 body = res.json()
 if not res.ok:
@@ -220,11 +220,11 @@ Every amount is an integer in micro-USD: `1,000,000` is one US dollar, and `10,0
 | Field | Example | In dollars |
 | --- | --- | --- |
 | `cost_micros` on a run | `19` | $0.000019 |
-| `ceiling_micros`, the per-run spend ceiling | `5000` | $0.005 |
+| `ceiling_micros`, the per-run spend ceiling | `20000` | $0.02 |
 | `balance_micros` after the sign-up credit | `5000000` | $5.00 |
 | `amount_micros` for a checkout | `25000000` | $25.00 |
 
-`balance_micros` and billing transaction amounts are signed; every other amount is zero or positive. Neon 1.1 costs $0.042 per million tokens for input and for output, and each part is rounded up to a whole micro-USD separately. A run holds its whole spend ceiling, at most 5,000 micro-USD, against your credit and quota until it settles. See [Models and pricing](/getting-started/models-and-pricing).
+`balance_micros` and billing transaction amounts are signed; every other amount is zero or positive. Neon 1.1 costs $0.042 per million tokens for input and for output, and each part is rounded up to a whole micro-USD separately. A run holds its whole spend ceiling, at most 20,000 micro-USD, against your credit and quota until it settles. See [Models and pricing](/getting-started/models-and-pricing).
 
 ## Identifiers and timestamps
 
@@ -279,10 +279,10 @@ The other lists do not page. `GET /v1/keys` returns every key, `GET /v1/billing`
 
 | Limit | Value |
 | --- | --- |
-| Request body | 1 MiB (1,048,576 bytes) |
-| Input estimate per run | 64,000 tokens; 3,968 tokens for a Neon 1.1 decision |
-| Spend per run | 5,000 micro-USD |
-| `deadline_ms` | 1 to 120,000, default 30,000 |
+| Request body | 4 MiB on `POST /v1/runs` and `POST /v1/router/select`; 1 MiB elsewhere |
+| Input estimate per run | 262,144 tokens for a Neon 1.1 decision; 64,000 for a verdict |
+| Spend per run | 20,000 micro-USD |
+| `deadline_ms` | decision: 1 to 150,000, default 30,000 plus 120,000 per 262,144 input tokens; verdict: 1 to 120,000, default 30,000 |
 | Questions per decision | 1 to 64, each with 2 to 20 alternatives |
 | Usage windows | `start_at` and `end_at` together, or neither; at most 92 days for the daily series |
 
@@ -293,6 +293,9 @@ There is no request-rate limit. See [Limits](/reference/limits) for the rest.
 <CardGroup cols={2}>
   <Card title="Runs" icon="play" href="/api-reference/runs/create">
     Create a run, list runs, retrieve one, or read it as server-sent events. Scopes `runs_write` and `runs_read`.
+  </Card>
+  <Card title="Model Router" icon="route" href="/api-reference/router/select">
+    Classify a task and select a model, list task types, list the catalog. Scopes `runs_write` and `runs_read`.
   </Card>
   <Card title="API keys" icon="key" href="/api-reference/keys/create">
     Create, list, retrieve, rotate and revoke keys. Scopes `keys_write` and `keys_read`.

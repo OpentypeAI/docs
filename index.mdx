@@ -66,7 +66,7 @@ res = requests.post(
         "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
         "max_output_tokens": 16,
     },
-    timeout=130,
+    timeout=160,
 )
 print(res.json()["decision"]["answers"]["urgent"]["probability"])  # P(yes)
 ```
@@ -88,7 +88,7 @@ The answer to `urgent` comes back under `decision.answers`:
 | Base URL | `https://api.opentype.dev`. Every API route is under `/v1/`. |
 | Auth | `Authorization: Bearer otsk_...`, an API key you create in the [console](/console/api-keys). See [Authentication](/security/authentication). |
 | Idempotency | `POST /v1/runs` requires an `Idempotency-Key` header of 1 to 255 bytes. See [Idempotency](/guides/idempotency). |
-| Body | JSON with `Content-Type: application/json`, snake_case field names, at most 1 MiB. Unknown fields are refused. |
+| Body | JSON with `Content-Type: application/json`, snake_case field names, at most 4 MiB for runs and router selections, 1 MiB elsewhere. Unknown fields are refused. |
 | Model | **Neon 1.1**. The optional `model` field on decision runs takes `neon-1.1` or `neon-latest`. See [Models and pricing](/getting-started/models-and-pricing). |
 | Money | Integers in micro-USD, in fields ending `_micros`. 1,000,000 micros is \$1. |
 | Timestamps | UTC strings in exactly `YYYY-MM-DDTHH:MM:SSZ` form, in fields ending `_at`. |

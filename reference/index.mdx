@@ -40,7 +40,7 @@ This tab is the lookup layer of the documentation. Come here when you already kn
 | --- | --- |
 | Base URL | `https://api.opentype.dev`, every route under `/v1` |
 | Authentication | `Authorization: Bearer otsk_...` on every `/v1` route |
-| Bodies | JSON, snake_case field names, unknown fields refused, 1 MiB at most |
+| Bodies | JSON, snake_case field names, unknown fields refused, 4 MiB at most on runs and router selections, 1 MiB elsewhere |
 | Money | integers in micro-USD: 1,000,000 is $1 |
 | Timestamps | `YYYY-MM-DDTHH:MM:SSZ`, UTC, second precision |
 | Errors | `{"error": {"code", "message", "request_id"}}`; branch on `code` |

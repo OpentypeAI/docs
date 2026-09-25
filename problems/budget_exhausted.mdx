@@ -15,7 +15,7 @@ keywords: ["budget_exhausted", "503", "spend ceiling", "per-request ceiling", "m
 
 Route: `POST /v1/runs`.
 
-Every run has a spend ceiling of at most 5,000 micro-USD ($0.005). Your organization's configuration can lower it, never raise it; `GET /v1/quota` reports it as `limits.request_spend_ceiling_micros`. The run holds that ceiling while it runs.
+Every run has a spend ceiling of at most 20,000 micro-USD ($0.02). Your organization's configuration can lower it, never raise it; `GET /v1/quota` reports it as `limits.request_spend_ceiling_micros`. The run holds that ceiling while it runs.
 
 `budget_exhausted` is raised when the run's own budget cannot cover what it is about to do:
 
@@ -31,7 +31,7 @@ The run was refused before the model served it. You are not charged, and the hol
 
 1. **Lower `max_output_tokens`.** A decision answer needs few output tokens; the examples in these docs use `16`.
 2. **Shrink the input.** Trim the `state` to the fields the questions need, and shorten `instructions` and question text.
-3. **Check the ceiling** with `GET /v1/quota` (needs `usage_read`). If `request_spend_ceiling_micros` is below 5,000, your organization's configuration lowered it.
+3. **Check the ceiling** with `GET /v1/quota` (needs `usage_read`). If `request_spend_ceiling_micros` is below 20,000, your organization's configuration lowered it.
 4. **Retry with a new `Idempotency-Key`.** `max_output_tokens` is not part of the key's identity, so the old key would replay the pending run instead of running the smaller request.
 
 ## Example

@@ -10,8 +10,8 @@ OpenType is prepaid. Your organization holds a credit balance, and every run dra
 ## How credit works
 
 - **Every amount is an integer in micro-USD.** 1,000,000 micros is 1 US dollar and 10,000 micros is 1 cent. `balance_micros` and a transaction's `amount_micros` are signed; every other amount is unsigned.
-- **Your balance is credited minus spent minus held.** Purchases and grants add to it, usage takes from it, and every run in flight holds its spend ceiling, at most 5,000 micros ($0.005), until it settles.
-- **A run needs 5,000 micros of available credit to start.** It holds that whole ceiling while it runs, then settles at its real cost, which is usually far lower. If the balance after the hold would go below zero, the run is refused with [`402 insufficient_credits`](/guides/handling-insufficient-credits).
+- **Your balance is credited minus spent minus held.** Purchases and grants add to it, usage takes from it, and every run in flight holds its spend ceiling, at most 20,000 micros ($0.02), until it settles.
+- **A run needs 20,000 micros of available credit to start.** It holds that whole ceiling while it runs, then settles at its real cost, which is usually far lower. If the balance after the hold would go below zero, the run is refused with [`402 insufficient_credits`](/guides/handling-insufficient-credits).
 - **New accounts start with $5 of credit** (5,000,000 micros), granted once the email address is verified. There is one grant per email address. See [Create an account](/getting-started/create-an-account).
 
 For a sense of scale: a decision run that reads 412 input tokens and writes 23 output tokens costs 19 micros at Neon 1.1 prices, so $5 covers a little over 260,000 runs of that size. See [Models and pricing](/getting-started/models-and-pricing) for the price and the rounding rule.
@@ -291,7 +291,7 @@ portal_url = res.json()["portal_url"]
 - **A replay** of an `Idempotency-Key` is never charged again. See [Idempotency](/guides/idempotency).
 - **A refusal before any model call is free**: every `400`, `402`, `409`, `413` and `429`, and every `503` or `504` raised before a model answered. The run's hold is released.
 - **A run that fails after the model answered** is charged for what the model consumed, for example `503 provider_malformed_response`.
-- **The hold is not a charge.** The 5,000 micros held while a run is in flight return to the balance when it settles; only the settled cost is spent.
+- **The hold is not a charge.** The 20,000 micros held while a run is in flight return to the balance when it settles; only the settled cost is spent.
 
 Your daily `usage` transaction records those charges for one UTC day. `GET /v1/usage/ledger` lists every charged model call, one row each. See [Usage reporting](/guides/usage-reporting).
 

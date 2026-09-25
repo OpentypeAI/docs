@@ -1,6 +1,6 @@
 ---
 title: "deadline_exceeded"
-description: "HTTP 504 on POST /v1/runs: the run's deadline passed before it finished. Raise deadline_ms (up to 120,000) or shrink the input, then retry with a new key."
+description: "HTTP 504 on POST /v1/runs: the run's deadline passed before it finished. Raise deadline_ms (up to 150,000) or shrink the input, then retry with a new key."
 icon: "stopwatch"
 keywords: ["deadline_exceeded", "504", "deadline_ms", "timeout", "POST /v1/runs", "gateway timeout"]
 ---
@@ -19,8 +19,10 @@ Every run has a deadline, set with `deadline_ms`:
 
 | `deadline_ms` | Value |
 | --- | --- |
-| Default | `30000` (30 seconds) |
-| Range | 1 to 120,000; values outside are clamped, so `0` becomes `1` and `300000` becomes `120000` |
+| Default, decision run | 30,000 plus 120,000 per 262,144 input tokens: about 30 seconds for a small state, 90 seconds for 128k tokens |
+| Range, decision run | 1 to 150,000; values outside are clamped, so `0` becomes `1` and `300000` becomes `150000` |
+| Default, verdict run | `30000` (30 seconds) |
+| Range, verdict run | 1 to 120,000 |
 
 The deadline covers choosing a model and the model call. When it passes in either step, the run fails with this code.
 
@@ -112,7 +114,7 @@ def create_run_with_retry(payload: dict, max_attempts: int = 4) -> dict:
                 "Idempotency-Key": str(uuid.uuid4()),
             },
             json=payload,
-            timeout=130,  # longer than the largest deadline_ms (120,000 ms)
+            timeout=160,  # longer than the largest deadline (150,000 ms)
         )
         data = resp.json()
         if resp.ok:

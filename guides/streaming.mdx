@@ -132,7 +132,7 @@ A browser `EventSource` reconnects automatically when the response closes, so it
 
 ## Waiting for a pending run
 
-The stream does not wait. To wait for a run that is `pending`, request it again after a delay, with the same limits as polling: a run still `pending` after its deadline (at most 120 seconds after it was sent) failed before a model call and will not settle. Send the original request again with a new `Idempotency-Key`. [Polling](/guides/polling) has the loop and the details.
+The stream does not wait. To wait for a run that is `pending`, request it again after a delay, with the same limits as polling: a run still `pending` after its deadline (at most 150 seconds after it was sent) failed before a model call and will not settle. Send the original request again with a new `Idempotency-Key`. [Polling](/guides/polling) has the loop and the details.
 
 ## When to use it
 

@@ -13,10 +13,10 @@ Quotas cap how much your organization may spend, and how many tokens it may use,
 | --- | --- | --- | --- |
 | Period spend limit | `limits.period_spend_limit_micros` | Everything the organization spends in the period | No spend limit |
 | Period token limit | `limits.period_token_limit` | Every token the organization uses in the period | No token limit |
-| Per-request ceiling | `limits.request_spend_ceiling_micros` | Each run on its own | Never null; at most 5,000 micros ($0.005) |
+| Per-request ceiling | `limits.request_spend_ceiling_micros` | Each run on its own | Never null; at most 20,000 micros ($0.02) |
 
 - **The quota period is the current UTC calendar month**, from the first of the month at 00:00:00Z to the first of the next month at 00:00:00Z. Consumption starts again from zero when the next period begins.
-- **The per-request ceiling is what every run holds** while it is in flight. It is at most 5,000 micros and can be set lower, never higher.
+- **The per-request ceiling is what every run holds** while it is in flight. It is at most 20,000 micros and can be set lower, never higher.
 - Every amount is an integer in micro-USD: 1,000,000 micros is 1 US dollar.
 
 There is no request-rate limit. A `429` from OpenType is always one of the quota refusals on this page.
@@ -69,7 +69,7 @@ if quota["remaining_spend_micros"] is not None:
   "limits": {
     "period_spend_limit_micros": 50000000,
     "period_token_limit": null,
-    "request_spend_ceiling_micros": 5000
+    "request_spend_ceiling_micros": 20000
   },
   "consumed_tokens": {"input_tokens": 488120, "output_tokens": 30211, "total_tokens": 518331},
   "consumed_spend": {"reserved_micros": 45000, "settled_micros": 21826, "unsettled_micros": 23174},
@@ -105,13 +105,13 @@ request_spend_ceiling_micros > remaining_spend_micros   ->   429 organization_sp
 {
   "error": {
     "code": "organization_spend_quota_exhausted",
-    "message": "the estimated provider spend of 5000 micro-USD exceeds the 1200 micro-USD remaining in this quota period",
+    "message": "the estimated provider spend of 20000 micro-USD exceeds the 1200 micro-USD remaining in this quota period",
     "request_id": "req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"
   }
 }
 ```
 
-A run that would settle at 19 micros is still refused when fewer than 5,000 micros of the period's limit remain (with the default ceiling). In practice, once less than one ceiling of the limit is left, no further run is admitted that period.
+A run that would settle at 19 micros is still refused when fewer than 20,000 micros of the period's limit remain (with the default ceiling). In practice, once less than one ceiling of the limit is left, no further run is admitted that period.
 
 ### `organization_token_quota_exhausted`
 
@@ -222,7 +222,7 @@ def wait_for_quota(tokens, poll_s=60):
 
 - Poll `GET /v1/quota` on a schedule and alert when `remaining_spend_micros` or `remaining_tokens` falls below what a normal day uses. Read a normal day from [`GET /v1/usage/daily`](/guides/usage-reporting#spend-per-day).
 - Keep `max_output_tokens` tight on every run. It counts in full against the token limit at admission.
-- Limit how many runs you have in flight at once. Each one holds up to 5,000 micros of the period's spend until it settles.
+- Limit how many runs you have in flight at once. Each one holds up to 20,000 micros of the period's spend until it settles.
 
 ## Related
 

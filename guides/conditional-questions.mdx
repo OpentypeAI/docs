@@ -92,7 +92,7 @@ res = requests.post(
         "Idempotency-Key": "ticket-4822-triage-followups",
     },
     data=body,
-    timeout=130,
+    timeout=160,
 )
 run = res.json()
 if not res.ok:

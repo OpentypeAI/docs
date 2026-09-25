@@ -24,7 +24,7 @@ These are the questions developers ask in their first week with the OpenType API
   {"usage": {"input_tokens": 412, "output_tokens": 23}, "cost_micros": 19, "cost_basis": "provider_reported"}
   ```
 
-  No run costs more than $0.005 (5,000 micro-USD), the per-request ceiling. See [Models and pricing](/getting-started/models-and-pricing).
+  No run costs more than $0.02 (20,000 micro-USD), the per-request ceiling. See [Models and pricing](/getting-started/models-and-pricing).
   </Accordion>
 
   <Accordion title="Is there free credit?">
@@ -32,7 +32,7 @@ These are the questions developers ask in their first week with the OpenType API
   </Accordion>
 
   <Accordion title="Why was my run refused with 402 when I still have credit?">
-  A run holds its whole per-request ceiling, 5,000 micro-USD, from the moment it is admitted until it settles, and runs in flight hold theirs at the same time. If your balance minus that hold would drop below zero, the run is refused with `402 insufficient_credits`. So a run needs at least $0.005 of available credit to start, even though it then costs much less. The refused request stored nothing, so you can retry it with the same `Idempotency-Key` after adding credit. See [Handling insufficient credits](/guides/handling-insufficient-credits).
+  A run holds its whole per-request ceiling, 20,000 micro-USD, from the moment it is admitted until it settles, and runs in flight hold theirs at the same time. If your balance minus that hold would drop below zero, the run is refused with `402 insufficient_credits`. So a run needs at least $0.02 of available credit to start, even though it then costs much less. The refused request stored nothing, so you can retry it with the same `Idempotency-Key` after adding credit. See [Handling insufficient credits](/guides/handling-insufficient-credits).
   </Accordion>
 
   <Accordion title="Am I charged for runs that fail or for retries?">
@@ -64,11 +64,11 @@ These are the questions developers ask in their first week with the OpenType API
   </Accordion>
 
   <Accordion title="How much input can a run take?">
-  A decision run's input estimate must fit Neon 1.1's context of **3,968 tokens**. The estimate is `ceil(state bytes / 4) + ceil(contract bytes / 4)`, where the contract is your `instructions`, `questions`, `draws` and `think_tokens`. Above that, the run is refused with `413 input_too_large`. The request body is capped at 1 MiB. See [Limits](/reference/limits).
+  A decision run's input estimate must fit Neon 1.1's context of **262,144 tokens** (256k). The estimate is `ceil(state bytes / 4) + ceil(contract bytes / 4)`, where the contract is your `instructions`, `questions`, `draws` and `think_tokens`. Above that, the run is refused with `413 input_too_large`. The request body is capped at 4 MiB. See [Limits](/reference/limits).
   </Accordion>
 
   <Accordion title="How many questions can one run ask?">
-  From 1 to 64 questions, each with 2 to 20 alternatives. The questions plus `instructions`, `draws` and `think_tokens` must fit in 32 KiB, and the whole input must still fit the 3,968-token context. Keep every option and level name to a single short word: long labels fail at routing time with `503 decision_unavailable`. See [Decision questions](/getting-started/decision-questions).
+  From 1 to 64 questions, each with 2 to 20 alternatives. The questions plus `instructions`, `draws` and `think_tokens` must fit in 32 KiB, and the whole input must still fit the 262,144-token context. Keep every option and level name to a single short word: long labels fail at routing time with `503 decision_unavailable`. See [Decision questions](/getting-started/decision-questions).
   </Accordion>
 </AccordionGroup>
 
@@ -78,18 +78,18 @@ These are the questions developers ask in their first week with the OpenType API
   <Accordion title="What are the rate limits?">
   There are none. OpenType has no rate limiter, and no request is refused for arriving too fast. The only `429` responses come from `POST /v1/runs`, and they are quota refusals:
 
-  - `organization_spend_quota_exhausted`: the per-request ceiling, at most 5,000 micro-USD, is more than the spend left in your organization's period limit.
+  - `organization_spend_quota_exhausted`: the per-request ceiling, at most 20,000 micro-USD, is more than the spend left in your organization's period limit.
   - `organization_token_quota_exhausted`: the estimated input tokens plus `max_output_tokens` are more than the tokens left in the period.
 
   The period is the current UTC calendar month. `GET /v1/quota` shows the limits and what remains; a `null` limit means there is none. See [Spend limits and quotas](/guides/spend-limits-and-quotas).
   </Accordion>
 
   <Accordion title="Is there a limit on parallel requests?">
-  No rate limit applies. What bounds parallel runs is credit: each run in flight holds 5,000 micro-USD until it settles, so the number of runs you can have in flight at once is roughly your available balance divided by 5,000 micro-USD, and a spend quota, if one is set, counts those holds too. See [Handling insufficient credits](/guides/handling-insufficient-credits).
+  No rate limit applies. What bounds parallel runs is credit: each run in flight holds 20,000 micro-USD until it settles, so the number of runs you can have in flight at once is roughly your available balance divided by 20,000 micro-USD, and a spend quota, if one is set, counts those holds too. See [Handling insufficient credits](/guides/handling-insufficient-credits).
   </Accordion>
 
   <Accordion title="How long can a run take?">
-  Each run has a deadline, `deadline_ms`: 30,000 by default, and any value is clamped to 1 to 120,000. A run that passes its deadline fails with `504 deadline_exceeded`. Set your HTTP client timeout above `deadline_ms`, for example 130 seconds for the maximum. See [Limits](/reference/limits).
+  Each run has a deadline, `deadline_ms`. A decision run defaults to 30,000 plus 120,000 per 262,144 input tokens, and any value is clamped to 1 to 150,000. A run that passes its deadline fails with `504 deadline_exceeded`. Set your HTTP client timeout above `deadline_ms`, at least 160 seconds. See [Limits](/reference/limits).
   </Accordion>
 </AccordionGroup>
 
@@ -123,7 +123,7 @@ These are the questions developers ask in their first week with the OpenType API
 
   1. **Replay** the same request, with the same `Idempotency-Key` and the same body. A completed run comes back as `200` with its answer and `"replayed": true`, and it is not charged again. A run that is not finished comes back as `202` with `"state": "pending"`.
   2. **Read** it by id with `GET /v1/runs/{run_id}` (scope `runs_read`). A completed run carries its `decision`, `usage` and `cost_micros`.
-  3. If the run is still `pending` after its deadline has passed (at most 120 s), it failed before a model served it and will not finish. Send the request again with a **new** key.
+  3. If the run is still `pending` after its deadline has passed (at most 150 s), it failed before a model served it and will not finish. Send the request again with a **new** key.
 
   If you lost the `run_id` as well, `GET /v1/runs?limit=5` lists your newest runs first.
 
@@ -152,7 +152,7 @@ These are the questions developers ask in their first week with the OpenType API
       method: "POST",
       headers: { ...auth, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(130_000),
+      signal: AbortSignal.timeout(160_000),
     });
     const run = await res.json();
     if (res.status === 200) return run; // settled: completed (with its answer) or failed
@@ -177,7 +177,7 @@ These are the questions developers ask in their first week with the OpenType API
   def recover(idempotency_key: str, body: dict) -> dict:
       """Replay with the ORIGINAL Idempotency-Key and body after a client-side timeout."""
       res = requests.post(f"{API}/v1/runs", headers={**AUTH, "Content-Type": "application/json", "Idempotency-Key": idempotency_key},
-                          json=body, timeout=130)
+                          json=body, timeout=160)
       run = res.json()
       if res.status_code == 200:
           return run  # settled: completed (with its answer) or failed

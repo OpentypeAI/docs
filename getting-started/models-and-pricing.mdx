@@ -1,6 +1,6 @@
 ---
 title: "Models and pricing"
-description: "Neon 1.1, the model behind every decision run: its ids, its 3,968-token context, the $0.042 per million token price, and how the cost of a run is rounded."
+description: "Neon 1.1, the model behind every decision run: its ids, its 262,144-token context, the $0.042 per million token price, and how the cost of a run is rounded."
 icon: "tags"
 keywords: ["pricing", "price", "cost", "model", "Neon 1.1", "neon-1.1", "neon-latest", "micro-USD", "context window", "cost_micros"]
 ---
@@ -16,10 +16,10 @@ OpenType serves one model, **Neon 1.1**. It answers decision runs: typed `noul`,
 | Model | Neon 1.1 |
 | API ids | `neon-1.1` (pinned), `neon-latest` (resolves to `neon-1.1` today) |
 | Serves | Decision runs (`"kind": "decision"`) |
-| Context | 3,968 tokens per decision |
+| Context | 262,144 tokens (256k) per decision |
 | Input price | \$0.042 per million tokens (42,000 micro-USD per million) |
 | Output price | \$0.042 per million tokens (42,000 micro-USD per million) |
-| Spend ceiling per run | 5,000 micro-USD (\$0.005) |
+| Spend ceiling per run | 20,000 micro-USD (\$0.02) |
 
 Verdict runs are not served by Neon 1.1. A verdict run (`"kind": "verdict"`, which is also what you get when `kind` is missing) answers `503` [`no_route_available`](/problems/no_route_available).
 
@@ -48,13 +48,13 @@ Live responses report the model that answered in `decision.model`, which reads `
 
 ## Context window
 
-Neon 1.1 reads at most **3,968 tokens** per decision. OpenType estimates a run's input before it calls the model, at about one token per 4 bytes: the bytes of your `state` divided by 4 and rounded up, plus the bytes of the canonical `instructions`, `questions`, `draws` and `think_tokens` divided by 4 and rounded up. A decision whose estimate is above 3,968 tokens is refused with `413` [`input_too_large`](/problems/input_too_large).
+Neon 1.1 reads at most **262,144 tokens** (256k) per decision. OpenType estimates a run's input before it calls the model, at about one token per 4 bytes: the bytes of your `state` divided by 4 and rounded up, plus the bytes of the canonical `instructions`, `questions`, `draws` and `think_tokens` divided by 4 and rounded up. A decision whose estimate is above 262,144 tokens is refused with `413` [`input_too_large`](/problems/input_too_large).
 
-In practice that means about 15 KB of text for the state and questions together. To stay under it:
+In practice that is about 1 MiB of text for the state and questions together, which fits in the 4 MiB request body. A long read takes longer, so the default deadline of a decision grows with its input; see [Limits](/reference/limits#long-context-decisions). To keep runs fast and cheap:
 
 - Send only the fields the questions need, not a whole record.
 - Keep `instructions` short. They are counted once per run, not once per question.
-- Split a very long document into several runs.
+- Split a document longer than 256k tokens into several runs.
 
 Send the smaller request with a new `Idempotency-Key`: reusing the old key with a different body can answer `409 idempotency_conflict`.
 
@@ -84,6 +84,7 @@ That is the `cost_micros: 19` in the response, next to `"usage": {"input_tokens"
 | 412 | 23 | 18 + 1 = 19 | \$0.000019 |
 | 1,000 | 20 | 42 + 1 = 43 | \$0.000043 |
 | 3,968 | 16 | 167 + 1 = 168 | \$0.000168 |
+| 262,144 | 16 | 11,011 + 1 = 11,012 | \$0.011012 |
 
 The same arithmetic in code, if you want to budget before sending:
 
@@ -129,11 +130,11 @@ print(cost_micros(412, 23))  # 19
 
 ## The per-request ceiling
 
-A single run may spend at most **5,000 micro-USD (\$0.005)**. A lower ceiling can apply to your organization, never a higher one; `GET /v1/quota` reports the one in force as `limits.request_spend_ceiling_micros`. While a run is in flight, OpenType **holds its whole ceiling** against your balance. When the run settles, the hold is released and only the actual cost is charged.
+A single run may spend at most **20,000 micro-USD (\$0.02)**. A lower ceiling can apply to your organization, never a higher one; `GET /v1/quota` reports the one in force as `limits.request_spend_ceiling_micros`. While a run is in flight, OpenType **holds its whole ceiling** against your balance. When the run settles, the hold is released and only the actual cost is charged.
 
 Two consequences:
 
-- **A run needs \$0.005 of available credit to start**, even though it usually costs a few hundredths of a cent. Below that, `POST /v1/runs` answers `402` [`insufficient_credits`](/problems/insufficient_credits).
+- **A run needs \$0.02 of available credit to start**, even though it usually costs a few hundredths of a cent. Below that, `POST /v1/runs` answers `402` [`insufficient_credits`](/problems/insufficient_credits).
 - **Parallel runs hold in parallel.** Ten runs in flight hold \$0.05 between them, until each one settles.
 
 A run whose spend would pass its ceiling fails with `503` [`budget_exhausted`](/problems/budget_exhausted).

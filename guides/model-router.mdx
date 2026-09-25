@@ -1,0 +1,243 @@
+---
+title: "Model Router"
+description: "Classify a task with Neon 1.1 and pick the best model for it from a benchmark catalog: policies, task types, filters, the response, costs and limits."
+icon: "route"
+keywords: ["model router", "POST /v1/router/select", "routing", "policy", "task_type", "balanced", "cost_efficient", "capability_heavy", "domain_skills", "benchmarks"]
+---
+
+The Model Router reads a task, classifies it with Neon 1.1, and ranks the models in its benchmark catalog for that task. You get one selected model, the classification that led to it, and a ranked shortlist with the expected quality, cost and latency of each candidate. Use it when your application sends prompts to several models and you want each prompt to go to the right one.
+
+The router selects a model; it does not call it. Send the prompt to the selected model with that model's own client.
+
+## How a selection works
+
+1. **Classify.** Neon 1.1 reads the task and returns a probability for each of the 27 [task types](/guides/router-task-types), a difficulty (`trivial`, `standard`, `hard` or `expert`) and facets such as expected output length, language, and whether the task needs tools or vision.
+2. **Weigh.** Each task type has a vector of benchmark weights. The router mixes the vectors of every task type at 5% probability or more, so a task that is part `debugging` and part `code_review` is judged on both.
+3. **Filter.** Your `models` filters, and `max_latency_ms`, remove models from the catalog. `filters_applied` reports how many models each filter removed.
+4. **Rank.** The policy turns expected quality, estimated cost and estimated latency into one score per model. The best score is `model`; the top ten are `ranking`.
+
+## Select a model
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/router/select \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: ticket-4822-route" \
+  -d '{
+    "prompt": "Our nightly pandas job fails with KeyError: '\''region'\'' after the CSV export changed. Find the cause and fix the merge.",
+    "policy": "balanced",
+    "latency": "standard"
+  }'
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/router/select", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}`,
+    "Content-Type": "application/json",
+    // Optional. A replay returns the stored selection and is never charged twice.
+    "Idempotency-Key": "ticket-4822-route",
+  },
+  body: JSON.stringify({
+    prompt:
+      "Our nightly pandas job fails with KeyError: 'region' after the CSV export changed. Find the cause and fix the merge.",
+    policy: "balanced",
+    latency: "standard",
+  }),
+  signal: AbortSignal.timeout(160_000), // above the 150 s maximum decision deadline
+});
+const selection = await res.json();
+if (!res.ok) {
+  throw new Error(`${res.status} ${selection.error.code} (${selection.error.request_id})`);
+}
+console.log(selection.model.id, selection.classification.task_type.label, selection.reason);
+```
+
+```python Python
+import os
+import requests
+
+res = requests.post(
+    "https://api.opentype.dev/v1/router/select",
+    headers={
+        "Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}",
+        "Content-Type": "application/json",
+        # Optional. A replay returns the stored selection and is never charged twice.
+        "Idempotency-Key": "ticket-4822-route",
+    },
+    json={
+        "prompt": "Our nightly pandas job fails with KeyError: 'region' after the CSV export changed. Find the cause and fix the merge.",
+        "policy": "balanced",
+        "latency": "standard",
+    },
+    timeout=160,  # above the 150 s maximum decision deadline
+)
+selection = res.json()
+if not res.ok:
+    raise RuntimeError(f"{res.status_code} {selection['error']['code']} ({selection['error']['request_id']})")
+print(selection["model"]["id"], selection["classification"]["task_type"]["label"], selection["reason"])
+```
+
+</CodeGroup>
+
+Send the task as `prompt`, or as `messages` (the same `role` and `content` turns as a run), never both.
+
+## Request fields
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `prompt` | string | | The task. Send this or `messages`. |
+| `messages` | array | | The task as conversation turns, joined into one text. Send this or `prompt`. |
+| `policy` | string | `balanced` | How candidates are ranked; see [Policies](#policies). Any other value is `400 invalid_policy`. |
+| `task_type` | string | | Skip task-type classification and route as this [task type](/guides/router-task-types). Difficulty and facets are still classified. Wins over `domain`. |
+| `domain` | string | | Route as this domain's default task type: `coding`, `math`, `reasoning`, `knowledge`, `agentic`, `long_context`, `writing`, `multilingual` or `general`. |
+| `latency` | string | `standard` | `interactive`, `standard` or `batch`: how much estimated latency weighs in `balanced`. |
+| `max_latency_ms` | number | | Drop models whose estimated time to the full answer is above this, or whose speed is not measured. |
+| `weights` | object | | `{"quality", "cost", "speed"}`, your own `balanced` trade-off, normalized to sum to 1. With any other policy it is `400 weights_require_balanced`. |
+| `models` | object | | Catalog filters; see [Filter the catalog](#filter-the-catalog). |
+
+Unknown fields are refused with `400 invalid_body`.
+
+The `Idempotency-Key` header is optional here. With one, a replay of the same body returns the stored selection with `replayed: true` and is not charged again. The same key with a different body is `409 idempotency_conflict`, and a replay while the first classification is still running, or after it failed, is `409 classification_not_ready`.
+
+## Policies
+
+| Policy | Ranks by | Quality bar |
+| --- | --- | --- |
+| `balanced` | Expected quality, minus a cost term and a latency term. The cost weight falls as difficulty rises: a trivial task leans on price, an expert task almost ignores it. `latency` sets the latency weight: 0.15 for `interactive`, 0.05 for `standard`, 0 for `batch`. | Yes |
+| `cost_efficient` | The lowest estimated cost for this request. | Yes |
+| `capability_heavy` | The highest expected quality, whatever it costs. | No |
+| `domain_skills` | Quality on the most probable task type's specialist benchmarks, with a small bonus for a top-three rank on its primary benchmark. `low_confidence` is `true` when that task type is under 40% probable. | No |
+
+The quality bar applies to `balanced` and `cost_efficient`. `threshold.q_star` is the best expected quality among the filtered models, `threshold.r` is the share of it the task's difficulty requires (0.55 for a trivial task up to 0.97 for an expert one, and at least 0.90 for a safety-sensitive task), and `threshold.tau` is `q_star × r`. A model below `tau` is not ranked, however cheap it is.
+
+To set your own trade-off, send `weights` with `balanced`:
+
+```json
+{"prompt": "...", "policy": "balanced", "weights": {"quality": 0.6, "cost": 0.3, "speed": 0.1}}
+```
+
+## Filter the catalog
+
+`models` narrows the catalog before ranking. Every field is optional.
+
+| Field | Meaning |
+| --- | --- |
+| `include` | Only these model ids. An id the catalog does not list is `400 unknown_model_id`. |
+| `exclude` | Never these model ids. Same check as `include`. |
+| `providers` | Only these providers, case-insensitive. |
+| `open_weights` | `true` for open-weights models only, `false` for closed only. |
+| `max_price_per_mtok` | The highest blended price, USD per million tokens, at 3 input tokens to 1 output token. |
+| `min_context_tokens` | The smallest context window a model must have. |
+| `modalities` | Every listed modality must be supported: `text`, `image`, `audio`, `video`. |
+
+When the filters remove every model the answer is `400 no_eligible_model`. `GET /v1/router/models` lists the catalog with ids, providers, prices, context, modalities, speed and benchmark scores, so you can build filters from real values.
+
+## Read the response
+
+Trimmed to the first candidate:
+
+```json
+{
+  "id": "rtr_0f8e3c1a9b2d4e5f8a7b6c5d4e3f2a1b",
+  "run_id": "run_0f8e3c1a9b2d4e5f8a7b6c5d4e3f2a1b",
+  "policy": "balanced",
+  "model": {"id": "gpt-6-sol", "name": "GPT-6 Sol", "provider": "openai", "open_weights": false},
+  "classification": {
+    "domain": {"label": "coding", "probabilities": {"coding": 0.93, "reasoning": 0.04}},
+    "difficulty": {"label": "medium", "probabilities": {"easy": 0.12, "medium": 0.71, "hard": 0.17}},
+    "task_type": {
+      "label": "debugging",
+      "family": "coding",
+      "top": [
+        {"task_type": "debugging", "family": "coding", "probability": 0.78},
+        {"task_type": "data_sql", "family": "coding", "probability": 0.15}
+      ],
+      "fixed": false
+    },
+    "facets": {"difficulty": {"label": "standard", "probabilities": {"standard": 0.7}}, "output_length": {"label": "medium", "probabilities": {"medium": 0.6}}, "language": "en", "needs_tools": 0.08, "needs_vision": 0.0, "safety_sensitive": 0.0, "difficulty_expected": 1.1, "output_tokens_est": 620, "target_language": null, "input_tokens_est": 38}
+  },
+  "ranking": [
+    {
+      "id": "gpt-6-sol",
+      "expected_quality": 0.81,
+      "uncertainty": 0.0,
+      "estimated_cost_usd": 0.0041,
+      "estimated_latency_ms": 9200,
+      "latency_estimated": false,
+      "strengths": [{"benchmark": "deepswe", "name": "DeepSWE", "norm": 0.92, "weight": 0.44, "contribution": 0.40}],
+      "weaknesses": [{"benchmark": "lmarena_math", "name": "LMArena Text: Math", "norm": 0.7, "weight": 0.19, "contribution": 0.13, "gap_to_best": -0.03}],
+      "imputed": []
+    }
+  ],
+  "score_basis": "benchmarks",
+  "threshold": {"q_star": 0.84, "r": 0.78, "tau": 0.66},
+  "filters_applied": [],
+  "low_confidence": false,
+  "input_tokens_est": 38,
+  "reason": "...",
+  "decision_model": "neon-1.1",
+  "catalog_as_of": "2026-09-24",
+  "benchmarks_as_of": "2026-09-24",
+  "cost_micros": 3,
+  "replayed": false
+}
+```
+
+The values above show the shape of the response, not a real selection.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `rtr_` plus the id of the classification run. |
+| `run_id` | The classification run. Read it with `GET /v1/runs/{run_id}`; it appears in usage like any decision run. |
+| `model` | The selected model: `id`, `name`, `provider`, `open_weights`. |
+| `classification.task_type` | The most probable task type (`label`, `family`), the five most probable with their probabilities (`top`), and `fixed: true` when you set `task_type` or `domain`. |
+| `classification.domain`, `classification.difficulty` | The coarse domain and an `easy`, `medium` or `hard` difficulty, each with its probabilities. |
+| `classification.facets` | What the ranking conditions on: the four-level difficulty and its expected value on a 0 to 3 scale, output length and expected output tokens, the probabilities that the task needs tools, needs vision or is safety-sensitive, its language, a translation target, and the input token estimate. |
+| `ranking` | Up to ten candidates, best first. Each has `expected_quality` (0 to 1), `uncertainty` (the weight resting on imputed benchmark values, 0 when every value was measured), `estimated_cost_usd` and `estimated_latency_ms` for this request, `latency_estimated` (a catalog median stood in for a missing speed), `strengths` (the top three benchmarks by contribution), `weaknesses` (up to two benchmarks where it trails the best candidate most, with `gap_to_best`) and `imputed`. |
+| `score_basis` | `benchmarks`: the ranking used the task's weighted benchmark vector. |
+| `threshold` | The quality bar, for `balanced` and `cost_efficient`; `null` otherwise. |
+| `filters_applied` | Each filter that removed at least one model, with how many it removed. |
+| `low_confidence` | `domain_skills` only: the most probable task type is under 40%. |
+| `reason` | One sentence on why the model was selected. |
+| `decision_model` | The model that classified the task: `neon-1.1`. |
+| `catalog_as_of`, `benchmarks_as_of` | The snapshot dates of the catalog and of the benchmark values. |
+| `usage`, `cost_micros` | Tokens and the cost of the classification. |
+| `replayed` | `true` when an `Idempotency-Key` replayed a stored selection. |
+
+## Cost
+
+A selection is billed as one decision run on Neon 1.1: the same admission, credit, quota and settlement as `POST /v1/runs` with `"kind": "decision"`, at the Neon 1.1 price in [Models and pricing](/getting-started/models-and-pricing). It needs `runs_write`; `GET /v1/router/task-types` and `GET /v1/router/models` need `runs_read` and are free.
+
+## Long tasks
+
+The router accepts long tasks: a request body of up to 4 MiB, which holds a task of 256k tokens or more. Neon 1.1 classifies the task from its head and tail, at most about 1,500 tokens, so a long task costs no more to classify than a short one and the selection finishes within the default 30-second decision deadline. `input_tokens_est` and every `estimated_cost_usd` and `estimated_latency_ms` still count the whole task, and `min_context_tokens` lets you require a context window large enough for it.
+
+Set your HTTP client timeout to at least **160 seconds**, the same as for decision runs, so the server, not your client, ends a slow request. The official SDKs default to that. A selection that runs out of time is `504 deadline_exceeded`. When you then send a long task to Neon 1.1 as a decision run, its deadline grows with the input; see [Limits](/reference/limits#long-context-decisions).
+
+## Errors
+
+| Status | `code` | What to do |
+| --- | --- | --- |
+| `400` | `invalid_body` | Fix the body: both or neither of `prompt` and `messages`, an unknown field, an unknown `task_type`, `domain` or `latency`, or invalid `weights` or `max_latency_ms`. |
+| `400` | `invalid_policy` | Use one of the four policies. |
+| `400` | `weights_require_balanced` | Drop `weights`, or use `balanced`. |
+| `400` | `unknown_model_id` | Use an id from `GET /v1/router/models`. |
+| `400` | `no_eligible_model` | Loosen the filters. |
+| `402` | [`insufficient_credits`](/problems/insufficient_credits) | Add credit. |
+| `409` | [`idempotency_conflict`](/problems/idempotency_conflict) | Use a new key for a changed body. |
+| `409` | `classification_not_ready` | Wait and replay the key, or send a new key. |
+| `413` | [`body_too_large`](/problems/body_too_large) | Shorten the task below 4 MiB. |
+| `429` | [`organization_spend_quota_exhausted`](/problems/organization_spend_quota_exhausted) | Wait for the next period or raise the limit. |
+| `503` | [`decision_unavailable`](/problems/decision_unavailable) | Retry with backoff. |
+| `504` | [`deadline_exceeded`](/problems/deadline_exceeded) | Retry; set a client timeout of at least 160 seconds. |
+
+## Related
+
+- [Task types and policies](/guides/router-task-types) - every task type the router classifies into, and the benchmarks behind each.
+- [Decision runs](/guides/decision-runs) - the run the router bills as, and how Neon 1.1 answers.
+- [Idempotency](/guides/idempotency) - how replays work and when to mint a new key.
+- [Limits](/reference/limits) - body size, input tokens and deadlines in one table.

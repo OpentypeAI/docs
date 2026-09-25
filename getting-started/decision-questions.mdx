@@ -34,7 +34,7 @@ A decision run asks typed questions about a `state` and returns a probability fo
 | `think_tokens` | no | 0 to 4,096, default 0. Hidden reasoning tokens the model may use before it answers. The reasoning text is never returned. |
 | `model` | no | `neon-1.1` or `neon-latest`. See [Models and pricing](/getting-started/models-and-pricing). |
 | `max_output_tokens` | yes | Greater than 0. |
-| `deadline_ms` | no | Default 30,000, clamped to 1 to 120,000. |
+| `deadline_ms` | no | Default 30,000 plus 120,000 per 262,144 input tokens, clamped to 1 to 150,000. |
 
 ## Question types
 
@@ -201,7 +201,7 @@ A question set outside these bounds is refused with `400` [`invalid_decision_que
 
 Two more limits apply after a question set passes these bounds:
 
-- **Total input.** The state and questions together must fit the 3,968-token context of Neon 1.1, else `413` [`input_too_large`](/problems/input_too_large). See [Models and pricing](/getting-started/models-and-pricing#context-window).
+- **Total input.** The state and questions together must fit the 262,144-token context of Neon 1.1, else `413` [`input_too_large`](/problems/input_too_large). See [Models and pricing](/getting-started/models-and-pricing#context-window).
 - **Label shape.** Each label is read as an answer token. Labels that cannot be read that way, or a set that does not fit the answer format, fail later with `503` [`decision_unavailable`](/problems/decision_unavailable). Short, common, single-word labels such as `billing`, `calm` or `high` are the safest choice.
 
 ## Related

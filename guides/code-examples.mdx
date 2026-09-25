@@ -490,7 +490,7 @@ See [Decision runs](/guides/decision-runs) for choosing thresholds, and [Conditi
 - **Deadlines.** Set `deadline_ms` in the body. The clients wait 10 seconds longer than it before timing out.
 - **Credit.** A `402` is raised to the caller. In a worker pool, pause every worker on the first `402`, as shown in [Handling insufficient credits](/guides/handling-insufficient-credits#code-pattern).
 - **Quota.** A `429` is retried a few times with backoff. For long waits, read `GET /v1/quota` instead; see [Spend limits and quotas](/guides/spend-limits-and-quotas#what-to-do).
-- **Concurrency.** Every run in flight holds up to 5,000 micros of credit and of the period's spend quota. Limit the number of parallel calls to what your balance covers.
+- **Concurrency.** Every run in flight holds up to 20,000 micros of credit and of the period's spend quota. Limit the number of parallel calls to what your balance covers.
 
 ## Related
 

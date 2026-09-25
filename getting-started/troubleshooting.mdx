@@ -89,7 +89,7 @@ res = requests.post(
         "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
         "max_output_tokens": 16,
     },
-    timeout=130,  # above the longest server-side deadline of 120 s
+    timeout=160,  # above the longest server-side deadline of 150 s
 )
 
 if not res.ok:
@@ -219,7 +219,7 @@ When you send your own id, the error body echoes it:
   {"error":{"code":"insufficient_credits","message":"the organization's credit balance does not cover this run","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
   ```
 
-  **Why.** Before a run starts, it holds its whole per-request spend ceiling, 5,000 micro-USD ($0.005), even though a typical decision run costs a few dozen micro-USD. If your available credit minus that hold would drop below zero, the run is refused. Available credit is `balance_micros`: credited, minus spent, minus the holds of runs still in flight, so many runs in parallel need more headroom than one.
+  **Why.** Before a run starts, it holds its whole per-request spend ceiling, 20,000 micro-USD ($0.02), even though a typical decision run costs a few dozen micro-USD. If your available credit minus that hold would drop below zero, the run is refused. Available credit is `balance_micros`: credited, minus spent, minus the holds of runs still in flight, so many runs in parallel need more headroom than one.
 
   Nothing is stored: the run and its hold are rolled back. If auto-recharge is on, an attempt is also queued in the background.
 
@@ -243,13 +243,13 @@ When you send your own id, the error body echoes it:
   **What you see**
 
   ```json
-  {"error":{"code":"organization_spend_quota_exhausted","message":"the estimated provider spend of 5000 micro-USD exceeds the 1200 micro-USD remaining in this quota period","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+  {"error":{"code":"organization_spend_quota_exhausted","message":"the estimated provider spend of 20000 micro-USD exceeds the 1200 micro-USD remaining in this quota period","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
   {"error":{"code":"organization_token_quota_exhausted","message":"the estimated 9000 tokens exceed the 4000 tokens remaining in this quota period","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
   ```
 
   **Why.** This is a quota refusal, not a rate limit: OpenType has no rate limiter, and `POST /v1/runs` is the only route that answers `429`. Your organization has a spend limit, a token limit, or both, for the current period, which is the current UTC calendar month.
 
-  - **Spend:** the check compares the run's per-request ceiling, at most 5,000 micro-USD, with what is left of the period's spend limit. It does not use the run's actual cost, so refusals begin once less than 5,000 micro-USD remain, even though a typical run costs far less.
+  - **Spend:** the check compares the run's per-request ceiling, at most 20,000 micro-USD, with what is left of the period's spend limit. It does not use the run's actual cost, so refusals begin once less than 20,000 micro-USD remain, even though a typical run costs far less.
   - **Tokens:** the estimated input tokens plus `max_output_tokens` exceed the tokens left in the period.
 
   **Fix.** Read the limits and what remains with `GET /v1/quota` (scope `usage_read`):
@@ -340,19 +340,19 @@ These errors come back after the run was admitted, so its `Idempotency-Key` is n
   **Log** the status, the code, the question ids and labels you sent, and the `x-request-id`. See [`decision_unavailable`](/problems/decision_unavailable) and [Decision questions](/getting-started/decision-questions).
   </Accordion>
 
-  <Accordion title="413 input_too_large: the input is over 3,968 tokens">
+  <Accordion title="413 input_too_large: the input is over 262,144 tokens">
   **What you see:** `413` with code `input_too_large`.
 
   **Why.** Every run gets an input estimate: `ceil(prompt bytes / 4) + ceil(contract bytes / 4)`. For a decision run the prompt is the `state`, a string as-is or anything else as its JSON text, and the contract is `instructions`, `questions`, `draws` and `think_tokens`. There are two ceilings:
 
   | Ceiling | Value | When it is checked |
   | --- | --- | --- |
-  | Neon 1.1 context | 3,968 tokens, about 15,800 bytes of state plus contract | when the run is routed, after admission |
-  | Every run | 64,000 tokens: `"the input estimate of N tokens exceeds the ceiling"` | before the run is admitted |
+  | Decision run | 262,144 tokens (256k), about 1 MiB of state plus contract | before the run is admitted |
+  | Verdict run | 64,000 tokens | before the run is admitted |
 
-  In practice the 3,968-token context is the one decision runs hit.
+  The message reads `"the input estimate of N tokens exceeds the ceiling"`.
 
-  **Fix.** Send only the fields of `state` that your questions need, shorten `instructions` and descriptions, and split a large question set across several runs. Send the smaller request with a new `Idempotency-Key`: the body has changed, and after a context refusal the old key is already tied to a pending run. The request body itself is capped separately at 1 MiB, which gives `413 body_too_large`.
+  **Fix.** Send only the fields of `state` that your questions need, shorten `instructions` and descriptions, and split a large question set across several runs. Send the smaller request with a new `Idempotency-Key`, since the body has changed. The request body itself is capped separately at 4 MiB, which gives `413 body_too_large`.
 
   **Log** the status, the code, the size of the `state` you sent and the `x-request-id`. See [`input_too_large`](/problems/input_too_large) and [Limits](/reference/limits).
   </Accordion>
@@ -360,9 +360,9 @@ These errors come back after the run was admitted, so its `Idempotency-Key` is n
   <Accordion title="504 deadline_exceeded: the run ran out of time">
   **What you see:** `504` with code `deadline_exceeded`. The message may say "before a route was chosen" even when the model call was the slow part, so rely on the code.
 
-  **Why.** Each run has a deadline, `deadline_ms`: 30,000 by default, clamped to 1 to 120,000. The deadline passed during routing or during the model call.
+  **Why.** Each run has a deadline, `deadline_ms`. For a decision run it defaults to 30,000 plus 120,000 per 262,144 input tokens and is clamped to 1 to 150,000; for a verdict run it defaults to 30,000 and is clamped to 1 to 120,000. The deadline passed during routing or during the model call.
 
-  **Fix.** Raise `deadline_ms`, up to 120,000, or shrink the input, then retry with backoff and a new `Idempotency-Key`. Set your HTTP client's timeout above `deadline_ms` so you receive the `504` instead of cutting the connection yourself.
+  **Fix.** Raise `deadline_ms`, up to 150,000 for a decision run, or shrink the input, then retry with backoff and a new `Idempotency-Key`. Set your HTTP client's timeout to at least 160 seconds so you receive the `504` instead of cutting the connection yourself.
 
   **Log** the status, the code, the `deadline_ms` you sent and the `x-request-id`. See [`deadline_exceeded`](/problems/deadline_exceeded).
   </Accordion>
@@ -388,7 +388,7 @@ These errors come back after the run was admitted, so its `Idempotency-Key` is n
 
   **Fix.** Send the request again with a **new** `Idempotency-Key`. Do not poll the pending run: it will not complete. A replay is never charged, so the `202`s cost nothing.
 
-  If you retried while the first request might still have been in flight, wait until its deadline has passed (at most 120 s) and replay once more. A `200` then carries the answer with `"replayed": true` and is not charged again; a run still `pending` after its deadline is stuck.
+  If you retried while the first request might still have been in flight, wait until its deadline has passed (at most 150 s) and replay once more. A `200` then carries the answer with `"replayed": true` and is not charged again; a run still `pending` after its deadline is stuck.
 
   **Log** the `Idempotency-Key`, the `run_id` from the `202` body and the `x-request-id` of every attempt. See [Polling](/guides/polling) and [Idempotency](/guides/idempotency).
   </Accordion>
@@ -424,7 +424,7 @@ These errors come back after the run was admitted, so its `Idempotency-Key` is n
   | 415 | ``Expected request with `Content-Type: application/json` `` | Missing or wrong `Content-Type` |
   | 422 | `Failed to deserialize the JSON body into the target type` | A wrong type, a missing field, or an **unknown field** |
   | 400 | `Failed to deserialize query string` | An unknown or malformed query parameter on `/v1/usage` routes |
-  | 413 | `Failed to buffer the request body` | A body over 1 MiB |
+  | 413 | `Failed to buffer the request body` | A body over 1 MiB, on routes other than `POST /v1/runs` and `POST /v1/router/select` |
   | 404, 405 | empty | Unknown path, or the wrong method on a known path |
 
   For example, keys never expire, so an expiry field is refused:

@@ -99,7 +99,7 @@ res = requests.post(
         "Idempotency-Key": "ticket-4821-intent",
     },
     data=body,
-    timeout=130,
+    timeout=160,
 )
 run = res.json()
 if res.status_code == 503 and run["error"]["code"] == "no_route_available":

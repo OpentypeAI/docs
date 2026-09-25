@@ -150,7 +150,7 @@ async function triage(ticketId: string, text: string): Promise<Run> {
       questions: { urgent: { type: "noul", instructions: "reply within the hour?" } },
       max_output_tokens: 16,
     }),
-    signal: AbortSignal.timeout(130_000), // above the 120 s maximum deadline
+    signal: AbortSignal.timeout(160_000), // above the 150 s maximum deadline
   });
   const body = await res.json();
   if (res.status === 409) {
@@ -182,7 +182,7 @@ def triage(ticket_id: str, text: str) -> dict:
             "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
             "max_output_tokens": 16,
         },
-        timeout=130,  # above the 120 s maximum deadline
+        timeout=160,  # above the 150 s maximum deadline
     )
     body = res.json()
     if res.status_code == 409:

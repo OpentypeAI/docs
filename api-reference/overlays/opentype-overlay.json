@@ -304,6 +304,48 @@
           }
         ]
       }
+    },
+    {
+      "target": "$.paths['/v1/router/select'].post",
+      "update": {
+        "summary": "Select a model",
+        "x-mint": {
+          "href": "/api-reference/router/select"
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    {
+      "target": "$.paths['/v1/router/task-types'].get",
+      "update": {
+        "summary": "List task types",
+        "x-mint": {
+          "href": "/api-reference/router/task-types"
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    {
+      "target": "$.paths['/v1/router/models'].get",
+      "update": {
+        "summary": "List router models",
+        "x-mint": {
+          "href": "/api-reference/router/models"
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   ]
 }

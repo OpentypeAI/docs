@@ -108,7 +108,7 @@ res = requests.post(
         },
         "max_output_tokens": 16,
     },
-    timeout=130,
+    timeout=160,
 )
 run = res.json()
 if not res.ok:

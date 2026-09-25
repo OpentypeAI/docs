@@ -58,7 +58,7 @@ A few rejections come from the web layer before OpenType's own handlers run. The
 | --- | --- | --- | --- |
 | `400` | begins `Failed to parse the request body as JSON` | malformed JSON | keys and billing routes |
 | `400` | begins `Failed to deserialize query string` | an unknown or malformed query parameter | usage routes |
-| `413` | begins `Failed to buffer the request body` | a body over 1 MiB | every route except `POST /v1/runs` |
+| `413` | begins `Failed to buffer the request body` | a body over 1 MiB | every route except `POST /v1/runs` and `POST /v1/router/select` |
 | `415` | begins ``Expected request with `Content-Type: application/json` `` | missing or wrong `Content-Type` | keys and billing routes |
 | `422` | begins `Failed to deserialize the JSON body into the target type` | a wrong type, a missing field, or an unknown field | keys and billing routes |
 | `404` | empty | unknown path | any |
@@ -80,7 +80,7 @@ The runs routes (`/v1/runs...`) wrap the same failures into JSON: `400 invalid_b
 | `429` | a period quota refused the run | not in a loop: back off for minutes, or surface it | Wait for in-flight runs to settle or for the next period, or lower `max_output_tokens`. See [Spend limits and quotas](/guides/spend-limits-and-quotas). |
 | `500` | unexpected internal failure | yes, with a new key, a few times at most | Report the `request_id` if it repeats. |
 | `503` | the service cannot serve this safely right now | yes, with backoff and a **new** key | Most codes clear on their own. `verdict_schema_violation` and `budget_exhausted` usually need a change to the request. |
-| `504` | the run's deadline passed | yes, with a **new** key | Raise `deadline_ms` (at most 120,000) or shrink the input. |
+| `504` | the run's deadline passed | yes, with a **new** key | Raise `deadline_ms` (at most 150,000 for a decision) or shrink the input. |
 | no response | client timeout or dropped connection | yes, with the **same** key | You get the stored run if the first attempt reached the service. See [Polling](/guides/polling). |
 
 A `429` is always a quota refusal, never a rate limit, so retrying it quickly does not help. Nothing was stored, so a later retry may reuse the same key. The helper below leaves `429`, like every other `4xx`, to your code.
@@ -171,7 +171,7 @@ export async function createRun(baseKey: string, body: unknown, maxAttempts = 4)
           "Idempotency-Key": key,
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(130_000), // above the 120 s maximum deadline
+        signal: AbortSignal.timeout(160_000), // above the 150 s maximum deadline
       });
     } catch (err) {
       // Timeout or dropped connection: the run may exist. Same key.
@@ -238,7 +238,7 @@ def create_run(base_key: str, body: dict, max_attempts: int = 4) -> dict:
                     "Idempotency-Key": key,
                 },
                 json=body,
-                timeout=130,  # above the 120 s maximum deadline
+                timeout=160,  # above the 150 s maximum deadline
             )
         except (requests.Timeout, requests.ConnectionError):
             # The run may exist. Same key.

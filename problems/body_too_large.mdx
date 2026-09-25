@@ -1,8 +1,8 @@
 ---
 title: "body_too_large"
-description: "HTTP 413 on POST /v1/runs: the request body is over 1 MiB. What counts toward the cap, how to shrink the body, and what other routes return."
+description: "HTTP 413 on POST /v1/runs: the request body is over 4 MiB. What counts toward the cap, how to shrink the body, and what other routes return."
 icon: "weight-hanging"
-keywords: ["body_too_large", "413", "payload too large", "1 MiB", "body size", "POST /v1/runs"]
+keywords: ["body_too_large", "413", "payload too large", "4 MiB", "body size", "POST /v1/runs", "POST /v1/router/select"]
 ---
 
 `body_too_large` means the body of a `POST /v1/runs` request is larger than OpenType accepts. Read this page if you send large documents, transcripts or JSON states in a run.
@@ -15,12 +15,12 @@ keywords: ["body_too_large", "413", "payload too large", "1 MiB", "body size", "
 
 Route: `POST /v1/runs`.
 
-The body is over 1 MiB (1,048,576 bytes). The whole body counts: the prompt or `state`, the schema or questions, and the JSON syntax around them. The request was refused before a run existed. Nothing was stored and nothing was charged.
+The body is over 4 MiB (4,194,304 bytes). The whole body counts: the prompt or `state`, the schema or questions, and the JSON syntax around them. The request was refused before a run existed. Nothing was stored and nothing was charged.
 
-On every other route, a body over 1 MiB is refused with a plain-text 413 whose body begins `Failed to buffer the request body`, not with this JSON error. The response still carries the `x-request-id` header.
+`POST /v1/router/select` has the same 4 MiB cap and answers the same code. On every other route, a body over 1 MiB is refused with a plain-text 413 whose body begins `Failed to buffer the request body`, not with this JSON error. The response still carries the `x-request-id` header.
 
 <Note>
-A body under 1 MiB can still be too large to run. Runs are also limited by their estimated input tokens, and a decision run's input must fit Neon 1.1's context of 3,968 tokens. Those limits return [`input_too_large`](/problems/input_too_large).
+A body under 4 MiB can still be too large to run. Runs are also limited by their estimated input tokens: 262,144 for a decision run on Neon 1.1, 64,000 for a verdict run. Those limits return [`input_too_large`](/problems/input_too_large).
 </Note>
 
 ## How to fix

@@ -78,7 +78,7 @@ res = requests.post(
         "Idempotency-Key": "ticket-4822-triage",
     },
     data=body,
-    timeout=130,  # longer than the largest deadline_ms (120 s)
+    timeout=160,  # longer than the largest deadline (150 s)
 )
 run = res.json()
 if not res.ok:
@@ -136,7 +136,7 @@ Send `Content-Type: application/json` and an `Idempotency-Key` header of 1 to 25
 | `draws` | integer | no | `1` | 1 to 8. With more than 1, `cost_micros` is an estimate (see [Costs](#costs)). |
 | `think_tokens` | integer | no | `0` | 0 to 4,096. Lets the model think before it answers. The thought text is never returned. |
 | `max_output_tokens` | integer | **yes** | | Must be greater than 0. |
-| `deadline_ms` | integer | no | `30000` | Clamped to 1 to 120,000: `0` becomes `1`, and anything above 120,000 becomes 120,000. |
+| `deadline_ms` | integer | no | 30,000 plus 120,000 per 262,144 input tokens | Clamped to 1 to 150,000: `0` becomes `1`, and anything above 150,000 becomes 150,000. |
 | `model` | string | no | none | `neon-1.1` or `neon-latest`; `neon-latest` resolves to Neon 1.1. Any other value is refused with `400 unknown_model`. |
 | `capability_hint` | array of strings | no | `[]` | Values from `chat`, `reasoning`, `tools`, `vision`, `streaming`, `embedding`, `structured_read`; at most 7, no duplicates. Can only narrow routing, never widen it. Mistakes are refused with `400 invalid_verdict_schema`. |
 
@@ -184,7 +184,7 @@ A question set that breaks one of these is refused with `400 invalid_decision_qu
 | `think_tokens` | 0 to 4,096 | `think_tokens must be at most four thousand and ninety-six` |
 | Contract size | `instructions` + `questions` + `draws` + `think_tokens`, at most 32 KiB. The `state` does not count. | `the question set is larger than the permitted size` |
 
-The whole request body is capped at 1 MiB (`413 body_too_large`).
+The whole request body is capped at 4 MiB (`413 body_too_large`).
 
 ## The response
 
@@ -246,7 +246,7 @@ output  ceil(42,000 ×  23 / 1,000,000) =  1
 cost_micros                              = 19
 ```
 
-- A run may never cost more than 5,000 micro-USD ($0.005). That whole ceiling is held from your balance while the run is in flight, and the run is charged its real cost when it settles.
+- A run may never cost more than 20,000 micro-USD ($0.02). That whole ceiling is held from your balance while the run is in flight, and the run is charged its real cost when it settles.
 - `cost_basis` is `estimated` when `draws` is greater than 1, or when usage was not reported. The cost is then the pre-call estimate at Neon 1.1 prices.
 - A replayed `Idempotency-Key` is never charged again.
 - Every refusal before the model call, `400`, `402`, `409`, `413` at admission and `429`, costs nothing.
@@ -263,9 +263,9 @@ Neon 1.1 reads a probability off each label. Admission does not check whether ev
 - Avoid multi-word names, punctuation, numbers and rare words as labels.
 - Put the explanation in the `choice` description or the `noul` `criteria`, not in the label.
 
-### Stay under 3,968 input tokens
+### Stay under 262,144 input tokens
 
-Neon 1.1 reads at most 3,968 input tokens per decision. The input estimate is roughly a quarter of the byte length of the `state`, plus a quarter of the byte length of `instructions` and `questions`. A run above the limit is refused with `413 input_too_large`.
+Neon 1.1 reads at most 262,144 input tokens (256k) per decision. The input estimate is roughly a quarter of the byte length of the `state`, plus a quarter of the byte length of `instructions` and `questions`. A run above the limit is refused with `413 input_too_large`.
 
 ```python
 import json, math
@@ -280,14 +280,14 @@ def input_estimate(body: dict) -> int:
     )
     return math.ceil(len(prompt.encode()) / 4) + math.ceil(len(contract.encode()) / 4)
 
-assert input_estimate(json.load(open("triage.json"))) < 3968
+assert input_estimate(json.load(open("triage.json"))) <= 262_144
 ```
 
-Trim long states to the fields the questions actually need. Because the body changes when you trim, send it with a new `Idempotency-Key`.
+A long state is accepted, but it costs more and takes longer. Trim it to the fields the questions actually need. Because the body changes when you trim, send it with a new `Idempotency-Key`.
 
 ### Set a client timeout above the deadline
 
-`deadline_ms` defaults to 30 seconds and never exceeds 120 seconds. Give your HTTP client a longer timeout than the deadline you send, so the server, not your client, decides when the run is over. A run that runs out of time returns `504 deadline_exceeded`.
+`deadline_ms` defaults to 30 seconds plus 120 seconds per 262,144 input tokens (about 90 seconds for 128k tokens), and never exceeds 150 seconds. Give your HTTP client a timeout of at least 160 seconds, longer than any deadline, so the server, not your client, decides when the run is over. A run that runs out of time returns `504 deadline_exceeded`.
 
 ## What goes wrong
 
@@ -299,7 +299,7 @@ Trim long states to the fields the questions actually need. Because the body cha
 | `400` | [`idempotency_key_required`](/problems/idempotency_key_required) | No `Idempotency-Key` header | Send one per logical request. |
 | `402` | [`insufficient_credits`](/problems/insufficient_credits) | The balance cannot cover the run's hold | [Add credit](/guides/handling-insufficient-credits), then retry with the same key. |
 | `409` | [`idempotency_conflict`](/problems/idempotency_conflict) | The key was already used with a different body | Use a new key for a new body. |
-| `413` | [`input_too_large`](/problems/input_too_large) | The input estimate is above 3,968 tokens | Shrink the `state` or the questions, then retry with a new `Idempotency-Key`. |
+| `413` | [`input_too_large`](/problems/input_too_large) | The input estimate is above 262,144 tokens | Shrink the `state` or the questions, then retry with a new `Idempotency-Key`. |
 | `429` | [`organization_spend_quota_exhausted`](/problems/organization_spend_quota_exhausted), [`organization_token_quota_exhausted`](/problems/organization_token_quota_exhausted) | The period quota is used up | See [Spend limits and quotas](/guides/spend-limits-and-quotas). |
 | `503` | [`decision_unavailable`](/problems/decision_unavailable) | No route could serve the decision, or the question set was refused at read time | Check the [labels](#keep-labels-short-and-single-token-friendly). Otherwise retry later with a new key. |
 | `504` | [`deadline_exceeded`](/problems/deadline_exceeded) | The deadline passed | Raise `deadline_ms` or shrink the input, then retry with a new key. |
@@ -309,7 +309,7 @@ After a `503` or `504`, retry with a **new** `Idempotency-Key`. A run that faile
 ## Related
 
 - [Decision questions](/getting-started/decision-questions) - the concepts behind question types, stages and answers.
-- [Playground](/console/playground) - build and try a question set in the console before you code it.
 - [invalid_decision_questions](/problems/invalid_decision_questions) - every reason a question set is refused.
 - [Limits](/reference/limits) - every per-request limit in one table.
 - [Idempotency](/guides/idempotency) - when to reuse an `Idempotency-Key` and when to mint a new one.
+- [Model Router](/guides/model-router) - use Neon 1.1 to pick a model for any prompt.

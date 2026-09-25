@@ -152,7 +152,7 @@ What follows from those rules:
 
 ## Pick the numbers
 
-- **Threshold:** at least your spend over the time a charge takes to land, plus 5,000 micros so the next run can still start. Every run needs 5,000 micros of available credit to be admitted.
+- **Threshold:** at least your spend over the time a charge takes to land, plus 20,000 micros so the next run can still start. Every run needs 20,000 micros of available credit to be admitted.
 - **Amount:** at least one busy hour of spend, because one charge per hour is the most you get. Read your spend per day from [`GET /v1/usage/daily`](/guides/usage-reporting#spend-per-day) to size it.
 
 For example, a pipeline that settles about $2 an hour at its peak is covered by a $5 threshold and a $20 amount.

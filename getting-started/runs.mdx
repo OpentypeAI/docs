@@ -148,7 +148,7 @@ def send():
             "questions": {"urgent": {"type": "noul", "instructions": "reply within the hour?"}},
             "max_output_tokens": 16,
         },
-        timeout=130,
+        timeout=160,
     ).json()
 
 first, second = send(), send()
@@ -179,10 +179,10 @@ If you need the full live record, store the `POST` response yourself. For per-ru
 
 | Limit | Value | Refusal |
 | --- | --- | --- |
-| Request body | 1 MiB (1,048,576 bytes) | `413` [`body_too_large`](/problems/body_too_large) |
-| Input for Neon 1.1 | 3,968 tokens (estimated) | `413` [`input_too_large`](/problems/input_too_large) |
-| Spend per run | 5,000 micro-USD (\$0.005), held while the run is in flight | `503` [`budget_exhausted`](/problems/budget_exhausted) |
-| `deadline_ms` | Default 30,000. Values are clamped to 1 to 120,000. | `504` [`deadline_exceeded`](/problems/deadline_exceeded) |
+| Request body | 4 MiB (4,194,304 bytes) | `413` [`body_too_large`](/problems/body_too_large) |
+| Input for Neon 1.1 | 262,144 tokens (256k, estimated) | `413` [`input_too_large`](/problems/input_too_large) |
+| Spend per run | 20,000 micro-USD (\$0.02), held while the run is in flight | `503` [`budget_exhausted`](/problems/budget_exhausted) |
+| `deadline_ms` | Decision: default 30,000 plus 120,000 per 262,144 input tokens, clamped to 1 to 150,000. Verdict: default 30,000, clamped to 1 to 120,000. | `504` [`deadline_exceeded`](/problems/deadline_exceeded) |
 | `max_output_tokens` | Required, greater than 0 | `400` [`invalid_body`](/problems/invalid_body) |
 | `Idempotency-Key` | Required, 1 to 255 bytes | `400` [`idempotency_key_required`](/problems/idempotency_key_required), [`invalid_idempotency_key`](/problems/invalid_idempotency_key) |
 

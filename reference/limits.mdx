@@ -1,8 +1,8 @@
 ---
 title: "Limits"
-description: "Every numeric limit in the OpenType API: body size, question and schema bounds, deadlines, token and spend ceilings, list sizes, windows, and quotas."
+description: "Every numeric limit in the OpenType API: body size, 256k-token decisions, deadlines, question and schema bounds, spend ceilings, lists and quotas."
 icon: "gauge-high"
-keywords: ["limits", "bounds", "quotas", "max_output_tokens", "deadline_ms", "body size", "spend ceiling", "input tokens"]
+keywords: ["limits", "bounds", "quotas", "max_output_tokens", "deadline_ms", "body size", "spend ceiling", "input tokens", "long context", "256k", "Server-Timing"]
 ---
 
 This page collects every limit the API enforces, the value, and the error you get when you cross it. Use it when you design a question set or a schema, size an input, or plan how much a batch job can send. All of these are checked per request; none of them is a rate.
@@ -15,8 +15,9 @@ There is no request-rate limit. OpenType does not count requests per second or p
 
 | Limit | Value | Applies to | When exceeded |
 | --- | --- | --- | --- |
-| Body size | 1 MiB (1,048,576 bytes) | every route | `413 body_too_large` on `POST /v1/runs`; a plain-text 413 elsewhere |
-| `Idempotency-Key` | 1 to 255 bytes of printable ASCII | `POST /v1/runs` | `400 invalid_idempotency_key` |
+| Body size | 4 MiB (4,194,304 bytes) | `POST /v1/runs`, `POST /v1/router/select` | `413 body_too_large` |
+| Body size | 1 MiB (1,048,576 bytes) | every other route | a plain-text 413 |
+| `Idempotency-Key` | 1 to 255 bytes of printable ASCII | `POST /v1/runs` (required), `POST /v1/router/select` (optional) | `400 invalid_idempotency_key` |
 | `x-request-id` | 1 to 128 characters from `A-Z a-z 0-9 . _ -` | every route | not an error: the server mints its own `req_` id instead |
 
 An `Idempotency-Key` is scoped to your organization and never expires: a key used once always refers to the same run.
@@ -28,20 +29,21 @@ These apply to every `POST /v1/runs`, decision or verdict.
 | Limit | Value | When exceeded |
 | --- | --- | --- |
 | `max_output_tokens` | required, at least 1 | `400 invalid_body` |
-| `deadline_ms` | 1 to 120,000; default 30,000 | not an error: values outside the range are clamped (0 becomes 1, larger values become 120,000). A run that runs out of time answers `504 deadline_exceeded`. |
+| `deadline_ms`, verdict run | 1 to 120,000; default 30,000 | not an error: values outside the range are clamped (0 becomes 1, larger values become 120,000). A run that runs out of time answers `504 deadline_exceeded`. |
+| `deadline_ms`, decision run | 1 to 150,000; default 30,000 plus 120,000 per 262,144 input tokens | clamped the same way, to 150,000 at most. See [Long-context decisions](#long-context-decisions). |
 | `capability_hint` | at most 7 values, no duplicates | `400 invalid_verdict_schema` |
-| Estimated input | 64,000 tokens | `413 input_too_large` |
-| Spend per request | 5,000 micro-USD ($0.005), or less if your organization sets a lower ceiling | `503 budget_exhausted` when the run's budget cannot cover the call |
+| Estimated input, verdict run | 64,000 tokens | `413 input_too_large` |
+| Spend per request | 20,000 micro-USD ($0.02), or less if your organization sets a lower ceiling | `503 budget_exhausted` when the run's budget cannot cover the call |
 
 The input estimate is `ceil(prompt bytes / 4) + ceil(contract bytes / 4)`, where the prompt is `system` plus `messages` (or the decision `state`) and the contract is your schema or question set. Roughly, 4 bytes of JSON count as one token.
 
-Each run holds its whole spend ceiling as a reservation until it settles, then is charged what it actually cost. With billing on, a run therefore needs up to 5,000 micros of available credit to start, even when it will cost far less.
+Each run holds its whole spend ceiling as a reservation until it settles, then is charged what it actually cost. With billing on, a run therefore needs up to 20,000 micros of available credit to start, even when it will cost far less.
 
 ## Decision runs
 
 | Limit | Value | When exceeded |
 | --- | --- | --- |
-| Estimated input, Neon 1.1 | 3,968 tokens | `413 input_too_large` |
+| Estimated input, Neon 1.1 | 262,144 tokens (256k) | `413 input_too_large` |
 | Questions per run | 1 to 64 | `400 invalid_decision_questions` |
 | Alternatives per question | 2 to 20 (`noul` always has 2) | `400 invalid_decision_questions` |
 | Question id | non-empty; no `:`, no line break; unique in the set | `400 invalid_decision_questions` |
@@ -54,7 +56,41 @@ Each run holds its whole spend ceiling as a reservation until it settles, then i
 | `model` | `neon-1.1` or `neon-latest`; optional | `400 unknown_model` |
 | Model calls per run | exactly 1 | |
 
-Neon 1.1 reads up to 3,968 tokens of input, far below the 64,000-token ceiling that applies to every run. Keep `state` compact: send the fields the questions need, not a whole record.
+Neon 1.1 reads up to 262,144 tokens of input per decision. Verdict runs keep the 64,000-token ceiling. Keep `state` to the fields the questions need: a smaller input is cheaper and returns sooner.
+
+## Long-context decisions
+
+A decision run can carry up to 262,144 input tokens (256k) in a body of up to 4 MiB. Reading that much takes the model longer, so the deadline of a decision scales with its input:
+
+| Input | Default deadline | Typical model time |
+| --- | --- | --- |
+| a few thousand tokens | about 30 s | a few seconds |
+| 128k tokens | about 90 s | about 40 s |
+| 253k tokens | about 146 s | about 110 s |
+| 262,144 tokens | 150 s | |
+
+The default is `30,000 + 120,000 × input_tokens / 262,144` milliseconds, clamped to 150,000. You can send a shorter `deadline_ms`, or a longer one up to 150,000. Verdict runs keep their own range: default 30,000, at most 120,000.
+
+Set your HTTP client timeout to at least **160 seconds**, above the longest deadline, so the server rather than your client ends a slow run and you receive the `504 deadline_exceeded` with its `request_id`. The official SDKs default to 160 seconds.
+
+A long input is priced like any other, per token: a full 262,144-token read with 16 output tokens costs 11,012 micro-USD, within the 20,000 micro-USD per-run ceiling. See [Models and pricing](/getting-started/models-and-pricing).
+
+## Response timing
+
+`POST /v1/runs` returns a `Server-Timing` header with the time spent in each phase, in milliseconds:
+
+```text
+Server-Timing: admit;dur=3.12, upstream;dur=812.40, gateway;dur=9.85, total;dur=822.25
+```
+
+| Phase | Meaning |
+| --- | --- |
+| `admit` | Authentication, validation, quota and credit checks before the run starts. |
+| `upstream` | The model call. |
+| `gateway` | Everything except `upstream`: the service's own overhead. |
+| `total` | The whole request, as the server saw it. |
+
+Compare `total` with your client's own measurement to see how much time the network took. The header is on `200` and `202` responses and on most refusals.
 
 Two properties are not checked at admission: whether each alternative name is a single token for the model, and whether the set fits the model's answer template. A set that fails either is refused later with `503 decision_unavailable`. See [Decision questions](/getting-started/decision-questions).
 
@@ -100,7 +136,7 @@ An organization can have two limits per quota period. The period is the current 
 
 | Quota | What is compared | When exceeded |
 | --- | --- | --- |
-| Period spend | the run's spend ceiling (up to 5,000 micros), not its actual cost, against the spend remaining this period | `429 organization_spend_quota_exhausted` |
+| Period spend | the run's spend ceiling (up to 20,000 micros), not its actual cost, against the spend remaining this period | `429 organization_spend_quota_exhausted` |
 | Period tokens | estimated input tokens plus `max_output_tokens` against the tokens remaining this period | `429 organization_token_quota_exhausted` |
 
 Because the spend check uses the ceiling, a run can be refused while the period still has a little room left. Held reservations count against the remaining spend until they settle, so a burst of concurrent runs can hit the quota and then clear as those runs finish.
@@ -150,11 +186,11 @@ print("period ends:", quota["period"]["end_at"])
   "limits": {
     "period_spend_limit_micros": 2000000,
     "period_token_limit": null,
-    "request_spend_ceiling_micros": 5000
+    "request_spend_ceiling_micros": 20000
   },
   "consumed_tokens": {"input_tokens": 824, "output_tokens": 46, "total_tokens": 870},
-  "consumed_spend": {"reserved_micros": 5038, "settled_micros": 38, "unsettled_micros": 5000},
-  "remaining_spend_micros": 1994962,
+  "consumed_spend": {"reserved_micros": 20038, "settled_micros": 38, "unsettled_micros": 20000},
+  "remaining_spend_micros": 1979962,
   "remaining_tokens": null
 }
 ```
@@ -162,7 +198,7 @@ print("period ends:", quota["period"]["end_at"])
 A quota refusal names the numbers it compared:
 
 ```json
-{"error":{"code":"organization_spend_quota_exhausted","message":"the estimated provider spend of 5000 micro-USD exceeds the 1200 micro-USD remaining in this quota period","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
+{"error":{"code":"organization_spend_quota_exhausted","message":"the estimated provider spend of 20000 micro-USD exceeds the 1200 micro-USD remaining in this quota period","request_id":"req_7d3f0c1a9b2e4f6a8c0d1e2f3a4b5c6d"}}
 ```
 
 See [Spend limits and quotas](/guides/spend-limits-and-quotas).
@@ -177,4 +213,4 @@ If the model service behind a run limits OpenType's traffic, the run fails with 
 - [Spend limits and quotas](/guides/spend-limits-and-quotas) - plan around period quotas.
 - [Models and pricing](/getting-started/models-and-pricing) - what Neon 1.1 costs per token.
 - [Decision questions](/getting-started/decision-questions) - design a question set inside the bounds.
-- [Conventions](/reference/conventions) - id, time and money formats.
+- [Model Router](/guides/model-router) - selection requests share the 4 MiB body cap.

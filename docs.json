@@ -140,6 +140,14 @@
             ]
           },
           {
+            "group": "Model Router",
+            "icon": "route",
+            "pages": [
+              "guides/model-router",
+              "guides/router-task-types"
+            ]
+          },
+          {
             "group": "Reliable requests",
             "icon": "arrows-rotate",
             "pages": [
@@ -317,6 +325,15 @@
               "GET /v1/runs",
               "GET /v1/runs/{run_id}",
               "GET /v1/runs/{run_id}/stream"
+            ]
+          },
+          {
+            "group": "Model Router",
+            "icon": "route",
+            "pages": [
+              "POST /v1/router/select",
+              "GET /v1/router/task-types",
+              "GET /v1/router/models"
             ]
           },
           {

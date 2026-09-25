@@ -80,7 +80,7 @@ print(f"{usage['runs']['completed']} runs completed, ${usage['spend']['settled_m
   "window": {"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
   "runs": {"total": 3, "completed": 2, "failed": 0, "in_flight": 1},
   "tokens": {"input_tokens": 824, "output_tokens": 46, "total_tokens": 870},
-  "spend": {"reserved_micros": 5038, "settled_micros": 38, "unsettled_micros": 5000}
+  "spend": {"reserved_micros": 20038, "settled_micros": 38, "unsettled_micros": 20000}
 }
 ```
 
@@ -94,7 +94,7 @@ print(f"{usage['runs']['completed']} runs completed, ${usage['spend']['settled_m
 | `spend.reserved_micros` | Per run, the larger of its hold and its cost while the hold is still in place; otherwise its cost |
 | `spend.unsettled_micros` | `reserved_micros - settled_micros`, never below 0: what is still held for runs that have not settled |
 
-In the example, two settled runs cost 38 micros and one run in flight holds its 5,000-micro ceiling.
+In the example, two settled runs cost 38 micros and one run in flight holds its 20,000-micro ceiling.
 
 <Note>
 A run that fails before any model call is made keeps state `pending`, so it stays counted in `in_flight` with no cost. See [Polling](/guides/polling).
@@ -303,7 +303,7 @@ print(run["state"], run["spend"]["settled_micros"], "of", run["ceiling_micros"])
   "created_at": "2026-09-24T09:14:01Z",
   "tokens": {"input_tokens": 412, "output_tokens": 23, "total_tokens": 435},
   "spend": {"reserved_micros": 19, "settled_micros": 19, "unsettled_micros": 0},
-  "ceiling_micros": 5000,
+  "ceiling_micros": 20000,
   "attempts": [
     {
       "run_id": "run_a4314b6c-c08f-4bd8-8140-99a613abeb44",
@@ -320,7 +320,7 @@ print(run["state"], run["spend"]["settled_micros"], "of", run["ceiling_micros"])
 }
 ```
 
-`ceiling_micros` is the most this run was allowed to spend, at most 5,000. `attempts` has the same fields as a ledger entry.
+`ceiling_micros` is the most this run was allowed to spend, at most 20,000. `attempts` has the same fields as a ledger entry.
 
 ## Two spellings of a run id
 

@@ -76,10 +76,10 @@ Pick your own backoff, for example 1, 2, 4 and 8 seconds with jitter, and stop a
 
 | What happened | Retry with |
 | --- | --- |
-| No response: timeout, connection reset, process restart | the **same** key. If the first attempt reached the service, you get its stored run back instead of a second charge: `200` when it finished, `202` with `"state": "pending"` when it did not. Set your client timeout above 120 seconds, the longest `deadline_ms`. |
+| No response: timeout, connection reset, process restart | the **same** key. If the first attempt reached the service, you get its stored run back instead of a second charge: `200` when it finished, `202` with `"state": "pending"` when it did not. Set your client timeout to at least 160 seconds, above the longest `deadline_ms`. |
 | `202` with `"state": "pending"` on a replay | a **new** key. The original attempt failed before a model answered, and that run stays `pending`. |
 | Any `400`, `401`, `402`, `403` or `429`, and `413 body_too_large` | the same key is safe after you fix the cause: nothing was stored under it. |
-| `413 input_too_large` | a **new** key once the input is smaller. An input over the model's own limit (3,968 tokens for Neon 1.1) is refused after the run is recorded, so that key is taken. |
+| `413 input_too_large` | a **new** key once the input is smaller. An input over the limit for its kind (262,144 tokens for a decision, 64,000 for a verdict) is refused before a run exists, so the same key is reusable; an input over a model's own limit is refused after the run is recorded, so that key is taken. |
 | `409 idempotency_conflict` | the original body with the same key, or the new body with a new key. |
 | A `500`, `503` or `504` | a **new** key. A run that failed before a model answered stays `pending` under its key, and a run that failed after a model answered is stored as `failed`; replaying that key returns the stored run instead of trying again. |
 
@@ -97,7 +97,7 @@ A few rejections come from the HTTP layer before a route's own validation runs. 
 | --- | --- | --- |
 | `400` | `Failed to parse the request body as JSON` | malformed JSON |
 | `400` | `Failed to deserialize query string` | an unknown or malformed query parameter on a `/v1/usage` route |
-| `413` | `Failed to buffer the request body` | a body over 1 MiB |
+| `413` | `Failed to buffer the request body` | a body over 1 MiB, on routes other than `POST /v1/runs` and `POST /v1/router/select` |
 | `415` | ``Expected request with `Content-Type: application/json` `` | missing or wrong `Content-Type` on a JSON route |
 | `422` | `Failed to deserialize the JSON body into the target type` | a wrong type, a missing required field, or an unknown field |
 | `404` | empty | unknown path |
@@ -179,12 +179,12 @@ if not res.ok:
 3. Scope: `403 scope_denied` without `runs_write`.
 4. `Idempotency-Key`: `400 idempotency_key_required` or `invalid_idempotency_key`.
 5. Prompt shape, then the schema or question set, then capability hints: `400 invalid_body`, `invalid_verdict_schema`, `invalid_decision_questions`.
-6. Input size: `413 input_too_large` above 64,000 estimated tokens.
+6. Input size: `413 input_too_large` above 262,144 estimated tokens for a decision, 64,000 for a verdict.
 7. Data store: `503 database_unavailable` or `not_configured`.
 8. Period quota: `429`.
 9. Idempotency: `409 idempotency_conflict` when the key was used with a different body.
 10. Credits: `402 insufficient_credits`.
-11. Routing and the model call: `503`, `504`, or `413 input_too_large` when the input is over Neon 1.1's 3,968-token limit.
+11. Routing and the model call: `503`, `504`, or `413 input_too_large` when the input is over the model's own limit.
 
 A replay of a key that already owns a run skips the quota and credit checks, so it is never refused with `429` or `402`.
 

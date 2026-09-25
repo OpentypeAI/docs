@@ -15,7 +15,7 @@ Open it at [console.opentype.dev/billing](https://console.opentype.dev/billing).
 OpenType is prepaid, in US dollars. Every run is charged against your organization's balance.
 
 - A new account's organization gets **$5 of free credit** once its email address is verified, one grant per email address. See [Create an account](/getting-started/create-an-account).
-- While a run is in flight it holds up to its ceiling of $0.005. When it settles, the hold is replaced by what it actually cost, which for a decision run is usually a small fraction of a cent.
+- While a run is in flight it holds up to its ceiling of $0.02. When it settles, the hold is replaced by what it actually cost, which for a decision run is usually a small fraction of a cent.
 - A run can start only while the balance covers that hold. Otherwise `POST /v1/runs` refuses it with `402 insufficient_credits`, and nothing is charged.
 
 [Credits and billing](/guides/credits-and-billing) explains holds and settlement in full.

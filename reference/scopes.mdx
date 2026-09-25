@@ -13,8 +13,8 @@ Scope names are snake_case strings on the wire, and the same string appears in e
 
 | Scope | Unlocks | Notes |
 | --- | --- | --- |
-| `runs_write` | `POST /v1/runs` | spends credit; the scope a production sender needs |
-| `runs_read` | `GET /v1/runs`, `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream` | read runs and their answers back |
+| `runs_write` | `POST /v1/runs`, `POST /v1/router/select` | spends credit; the scope a production sender needs |
+| `runs_read` | `GET /v1/runs`, `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream`, `GET /v1/router/task-types`, `GET /v1/router/models` | read runs and their answers back |
 | `usage_read` | `GET /v1/usage`, `GET /v1/usage/ledger`, `GET /v1/usage/daily`, `GET /v1/usage/runs/{run_id}`, `GET /v1/quota` | usage totals, the per-call ledger, the daily series, and quota |
 | `billing_read` | `GET /v1/billing` | balance, auto-recharge settings, recent transactions |
 | `billing_write` | `POST /v1/billing/checkout`, `POST /v1/billing/portal`, `PUT /v1/billing/auto-recharge` | buy credits, open the billing portal, change auto-recharge |

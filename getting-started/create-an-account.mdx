@@ -43,7 +43,7 @@ Sign-up is open to anyone; you do not need an invitation.
 | An organization | Created for you at sign-up. Your API keys, runs, usage, and credit balance belong to it. See [Organizations and roles](/getting-started/organizations-and-roles). |
 | Free credit | \$5, which is 5,000,000 micro-USD. It is granted once the email address is verified, and **once per email address**: signing up again with an address that already received it does not grant it again. |
 
-\$5 goes a long way. The three-question run in the [quickstart](/getting-started/quickstart) costs 19 micro-USD, so the grant covers more than 250,000 runs like it. Each run needs \$0.005 of available credit to start, because it holds that amount until it finishes; see [Models and pricing](/getting-started/models-and-pricing#the-per-request-ceiling).
+\$5 goes a long way. The three-question run in the [quickstart](/getting-started/quickstart) costs 19 micro-USD, so the grant covers more than 250,000 runs like it. Each run needs \$0.02 of available credit to start, because it holds that amount until it finishes; see [Models and pricing](/getting-started/models-and-pricing#the-per-request-ceiling).
 
 When the credit runs out, runs are refused with `402 insufficient_credits` until you [buy credits](/guides/credits-and-billing) or turn on [auto-recharge](/guides/auto-recharge).
 
@@ -76,7 +76,7 @@ After you sign in, the console needs to know which organization you are working 
 | The password is refused | It is shorter than 10 characters, or it appears in a known breach. | Choose a longer, unique password. |
 | No credit on the account | The email address is not verified yet, or it already received the grant on an earlier account. | Verify the address from the email you received. The grant is not repeated for the same address. |
 | **Your account has no organization yet** | Your account is not a member of any organization. | Use the **Create organization** form. |
-| API calls fail with `402 insufficient_credits` | Your available balance is below the \$0.005 a run holds. | [Buy credits](/guides/credits-and-billing), or verify your email if you have not yet. |
+| API calls fail with `402 insufficient_credits` | Your available balance is below the \$0.02 a run holds. | [Buy credits](/guides/credits-and-billing), or verify your email if you have not yet. |
 
 More fixes are on [Troubleshooting](/getting-started/troubleshooting).
 

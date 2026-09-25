@@ -65,7 +65,7 @@ Its meta says what it is built from, such as `from the last 200 attempts`: it ad
 | --- | --- |
 | **Period spend** | Spend this period, settled plus held, with the limit beside it (`of $50.00`), or *no limit set* |
 | **Period tokens** | Tokens this period, with the limit beside it, or *no limit set* |
-| **Per-request ceiling** | The most a single run may cost, at most $0.005. Each run holds this much while it is in flight |
+| **Per-request ceiling** | The most a single run may cost, at most $0.02. Each run holds this much while it is in flight |
 | **Held, not settled** | What runs still in flight are holding |
 
 The panel reads the same figures the API checks when it admits a run, so this panel and a refusal never disagree. When a run would pass the period's spend or token limit, `POST /v1/runs` refuses it with `429 organization_spend_quota_exhausted` or `429 organization_token_quota_exhausted`, before anything is read or charged. The limits reset at the start of the next period. See [Spend limits and quotas](/guides/spend-limits-and-quotas).
@@ -192,11 +192,11 @@ print(usage["runs"]["total"], "runs,", usage["runs"]["failed"], "failed")
   "window": {"start_at": "2026-09-01T00:00:00Z", "end_at": "2026-10-01T00:00:00Z"},
   "runs": {"total": 3, "completed": 2, "failed": 0, "in_flight": 1},
   "tokens": {"input_tokens": 824, "output_tokens": 46, "total_tokens": 870},
-  "spend": {"reserved_micros": 5038, "settled_micros": 38, "unsettled_micros": 5000}
+  "spend": {"reserved_micros": 20038, "settled_micros": 38, "unsettled_micros": 20000}
 }
 ```
 
-Here one run is still in flight and holds $0.005 (`unsettled_micros: 5000`), so **Spend** reads `$0.0050` (settled plus held) until the run settles. [Usage reporting](/guides/usage-reporting) covers every route and field.
+Here one run is still in flight and holds $0.02 (`unsettled_micros: 20000`), so **Spend** reads `$0.0200` (settled plus held) until the run settles. [Usage reporting](/guides/usage-reporting) covers every route and field.
 
 ## Related
 

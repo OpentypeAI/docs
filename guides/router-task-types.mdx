@@ -1,0 +1,170 @@
+---
+title: "Task types and policies"
+sidebarTitle: "Task types"
+description: "The 27 task types the Model Router classifies into, their families, and the benchmarks and weights each one is ranked on, with how each policy uses them."
+icon: "tags"
+keywords: ["task types", "GET /v1/router/task-types", "task_type", "families", "benchmarks", "weights", "policy", "model router"]
+---
+
+The Model Router scores every candidate model on a weighted set of benchmarks, and the weights depend on the kind of task. This page lists the 27 task types the router classifies into, the eight families they belong to, and the benchmarks behind each one. Use it to choose a `task_type` to fix in a request, or to understand why the router picked a model.
+
+The tables below are the response of `GET /v1/router/task-types` with benchmarks as of **2026-09-24**. The benchmark values and weights are refreshed with the catalog; read the endpoint for the current set, and `benchmarks_as_of` in any selection for the snapshot it used.
+
+## Read the task types
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.opentype.dev/v1/router/task-types \
+  -H "Authorization: Bearer $OPENTYPE_API_KEY"
+```
+
+```ts TypeScript
+const res = await fetch("https://api.opentype.dev/v1/router/task-types", {
+  headers: { Authorization: `Bearer ${process.env.OPENTYPE_API_KEY}` }, // needs runs_read
+});
+const body = await res.json();
+if (!res.ok) throw new Error(`${body.error.code} (${body.error.request_id})`);
+console.log(body.benchmarks_as_of, body.families);
+for (const t of body.task_types) console.log(t.id, t.family, t.weights[0].name);
+```
+
+```python Python
+import os, requests
+
+res = requests.get(
+    "https://api.opentype.dev/v1/router/task-types",
+    headers={"Authorization": f"Bearer {os.environ['OPENTYPE_API_KEY']}"},  # needs runs_read
+    timeout=30,
+)
+body = res.json()
+if not res.ok:
+    raise RuntimeError(f"{body['error']['code']} ({body['error']['request_id']})")
+print(body["benchmarks_as_of"], body["families"])
+for t in body["task_types"]:
+    print(t["id"], t["family"], t["weights"][0]["name"])
+```
+
+</CodeGroup>
+
+The response has `benchmarks_as_of`, `families`, and one entry per task type:
+
+```json
+{
+  "benchmarks_as_of": "2026-09-24",
+  "families": ["coding", "math", "science", "knowledge", "documents", "writing", "agents", "vision"],
+  "task_types": [
+    {
+      "id": "code_generation",
+      "family": "coding",
+      "domain": "coding",
+      "description": "Write new, self-contained code (a function, class, algorithm, script or small program) from a spec; no existing codebase, UI, SQL or infrastructure focus.",
+      "turns": 1.0,
+      "weights": [
+        {"benchmark": "aa_coding_index", "name": "AA Coding Index (Terminal-Bench 4.0 + SciCode)", "weight": 0.2},
+        {"benchmark": "epoch_ale_bench", "name": "ALE-Bench", "weight": 0.4}
+      ]
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | The value to send as `task_type` in `POST /v1/router/select`. |
+| `family` | One of the eight families. |
+| `domain` | The coarse domain it reports as in `classification.domain`, and the value `domain` accepts. |
+| `description` | What a task of this type looks like. The classifier is given these definitions. |
+| `turns` | Expected model turns. Agentic types are multi-turn, which multiplies their estimated cost and latency. |
+| `weights` | The benchmark vector the task is ranked on. Weights sum to 1. |
+
+## All task types
+
+Benchmarks are listed by weight, largest first. Weights are rounded to two decimals.
+
+### Coding
+
+| Task type | Description | Turns | Benchmarks (weight) |
+| --- | --- | --- | --- |
+| `code_generation` | Write new, self-contained code (a function, class, algorithm, script or small program) from a spec; no existing codebase, UI, SQL or infrastructure focus. | 1 | ALE-Bench (0.40)<br />LMArena Text: Coding (0.27)<br />AA Coding Index (Terminal-Bench 4.0 + SciCode) (0.20)<br />SciCode (0.13) |
+| `debugging` | Find and fix the cause of an error, failing test, crash, leak or wrong behavior in given code or logs. | 1 | DeepSWE (0.44)<br />AA Coding Index (Terminal-Bench 4.0 + SciCode) (0.19)<br />LMArena Text: Coding (0.19)<br />Terminal-Bench 4.0 (AA run) (0.19) |
+| `refactoring` | Rework existing code while preserving behavior: rename, split, clean up, migrate or upgrade a version or framework. | 1 | DeepSWE (0.38)<br />LMArena Text: Instruction following (0.23)<br />LMArena Text: Coding (0.23)<br />AA Coding Index (Terminal-Bench 4.0 + SciCode) (0.15) |
+| `code_review` | Critique given code or a diff for bugs, security issues, performance or style, without necessarily rewriting it. | 1 | DeepSWE (0.33)<br />LMArena Text: Coding (0.22)<br />AA Coding Index (Terminal-Bench 4.0 + SciCode) (0.17)<br />GPQA Diamond (0.17)<br />SimpleQA Verified (0.11) |
+| `agentic_swe` | Operate on a repository over multiple steps with tools (read files, edit many files, run tests or commands) to finish an engineering task. | 8 | CursorBench (0.35)<br />Terminal-Bench 4.0 (AA run) (0.25)<br />DeepSWE (0.20)<br />AA Coding Index (Terminal-Bench 4.0 + SciCode) (0.10)<br />tau3-bench Banking (0.10) |
+| `frontend_ui` | Build or style web or app UI: an HTML/CSS page, a landing page, a React, Vue or Svelte component, Tailwind, layout, accessibility, a page from a mockup. | 1 | LMArena Code Arena (WebDev successor) (0.53)<br />AA Coding Index (Terminal-Bench 4.0 + SciCode) (0.18)<br />LMArena Vision arena (0.18)<br />ALE-Bench (0.12) |
+| `data_sql` | Data code: SQL queries, pandas or dataframe transformations, data pipelines, ETL, data models and schemas. | 1 | AA Coding Index (Terminal-Bench 4.0 + SciCode) (0.38)<br />ALE-Bench (0.25)<br />LMArena Text: Math (0.19)<br />LMArena Text: Coding (0.19) |
+| `shell_devops` | Shell commands and scripts, Dockerfiles, CI/CD workflows (GitHub Actions), container orchestration, Terraform, servers and system administration. | 1 | Terminal-Bench 4.0 (AA run) (0.50)<br />AA Coding Index (Terminal-Bench 4.0 + SciCode) (0.15)<br />DeepSWE (0.15)<br />LMArena Text: Coding (0.10)<br />SimpleQA Verified (0.10) |
+
+### Math
+
+| Task type | Description | Turns | Benchmarks (weight) |
+| --- | --- | --- | --- |
+| `competition_math` | A math problem with one exact final answer: number theory, geometry, algebra, combinatorics, contest (AIME) style, or simple arithmetic. | 1 | OTIS Mock AIME 2024-2025 (0.50)<br />LMArena Text: Math (0.25)<br />Humanity's Last Exam (no tools) (0.15)<br />GPQA Diamond (0.10) |
+| `applied_math` | Quantitative computation in a real-world setting: finance, statistics, regression, physics formulas, modeling, estimation. | 1 | LMArena Text: Math (0.30)<br />GPQA Diamond (0.20)<br />OTIS Mock AIME 2024-2025 (0.20)<br />AA Intelligence Index v4.3 (0.15)<br />SciCode (0.15) |
+| `proofs` | Prove or demonstrate a statement (by induction, contradiction, construction) or check a derivation, including formal proofs (Lean/Coq). | 1 | ProofBench (0.55)<br />Humanity's Last Exam (no tools) (0.20)<br />OTIS Mock AIME 2024-2025 (0.15)<br />GPQA Diamond (0.10) |
+
+### Science
+
+| Task type | Description | Turns | Benchmarks (weight) |
+| --- | --- | --- | --- |
+| `science_reasoning` | Explain or solve problems in the natural sciences, medicine or engineering that need domain knowledge plus multi-step reasoning. | 1 | GPQA Diamond (0.44)<br />Humanity's Last Exam (no tools) (0.28)<br />AA-Omniscience accuracy (0.17)<br />SimpleQA Verified (0.11) |
+| `analytical_reasoning` | Logic puzzles, causal or business analysis, decisions under constraints, diagnosis from evidence; no specialist domain required. | 1 | LMArena Text: Hard prompts (0.30)<br />AA Intelligence Index v4.3 (0.20)<br />GPQA Diamond (0.20)<br />Humanity's Last Exam (no tools) (0.20)<br />LMArena Text: Instruction following (0.10) |
+
+### Knowledge
+
+| Task type | Description | Turns | Benchmarks (weight) |
+| --- | --- | --- | --- |
+| `factual_qa` | Answer a factual question from the model's own knowledge; correctness and calibrated "I don't know" matter most. | 1 | SimpleQA Verified (0.35)<br />AA-Omniscience accuracy (0.30)<br />AA-Omniscience hallucination rate (0.25)<br />LMArena Text overall (0.10) |
+| `research_search` | Needs up-to-date or multi-source information found via web search or browsing, with citations. | 5 | AA-Omniscience hallucination rate (0.27)<br />SimpleQA Verified (0.27)<br />tau3-bench Banking (0.27)<br />AA-LCR (long context reasoning) (0.18) |
+
+### Documents
+
+| Task type | Description | Turns | Benchmarks (weight) |
+| --- | --- | --- | --- |
+| `summarization` | Condense given text (from a message to a book) into a shorter faithful form. | 1 | AA-LCR (long context reasoning) (0.25)<br />LMArena Text overall (0.25)<br />AA-Omniscience hallucination rate (0.20)<br />LMArena Text: Instruction following (0.15)<br />MLCR-AA (medical long context) (0.15) |
+| `long_document_qa` | Answer questions that require locating and combining facts inside a long provided document or corpus. | 1 | AA-LCR (long context reasoning) (0.40)<br />MLCR-AA (medical long context) (0.35)<br />AA-Omniscience hallucination rate (0.15)<br />GPQA Diamond (0.10) |
+| `extraction_structured` | Pull fields or entities from given text into a strict format (JSON, CSV, a schema). | 1 | LMArena Text: Instruction following (0.35)<br />AutomationBench-AA (0.25)<br />AA-LCR (long context reasoning) (0.15)<br />AA-Omniscience hallucination rate (0.15)<br />AA Intelligence Index v4.3 (0.10) |
+| `classification_triage` | Assign labels, categories, priorities or sentiment to given items. | 1 | LMArena Text: Instruction following (0.35)<br />AA Intelligence Index v4.3 (0.20)<br />LMArena Text overall (0.20)<br />AutomationBench-AA (0.15)<br />LMArena Text: Non-English (0.10) |
+
+### Writing
+
+| Task type | Description | Turns | Benchmarks (weight) |
+| --- | --- | --- | --- |
+| `translation` | Translate or localize given text between languages, preserving meaning and register. | 1 | LMArena Text: Non-English (0.75)<br />LMArena Text overall (0.15)<br />LMArena Text: Instruction following (0.10) |
+| `creative_writing` | Fiction, poetry, humor, role-play, story continuation or other imaginative text. | 1 | EQ-Bench Creative Writing v3 (0.45)<br />LMArena Text: Creative writing (0.40)<br />LMArena Text overall (0.15) |
+| `professional_writing` | Business, marketing, legal-style, academic or technical prose: emails, letters, RFCs, memos, copy. | 1 | LMArena Text overall (0.30)<br />GDPval-AA (0.25)<br />LMArena Text: Instruction following (0.25)<br />AA-Omniscience hallucination rate (0.10)<br />LMArena Text: Creative writing (0.10) |
+| `conversation_support` | Open chit-chat, advice, emotional support, persona or customer-support dialogue, multi-turn assistance. | 1 | LMArena Text: Multi-turn (0.47)<br />LMArena Text overall (0.33)<br />LMArena Text: Instruction following (0.20) |
+
+### Agents
+
+| Task type | Description | Turns | Benchmarks (weight) |
+| --- | --- | --- | --- |
+| `tool_calling` | Call provided functions, tools or APIs (single or multi-step) to complete the user's request, following a policy if given. | 3 | AutomationBench-AA (0.40)<br />tau3-bench Banking (0.40)<br />EnterpriseOps-Gym-AA (0.10)<br />LMArena Text: Instruction following (0.10) |
+| `computer_browser_agent` | Operate a GUI desktop or web browser (click, type, read screens, fill forms) to accomplish a task. | 10 | LMArena Vision arena (0.50)<br />tau3-bench Banking (0.50) |
+| `planning` | Produce a plan, schedule, itinerary, training program, roadmap or strategy with steps, dependencies and trade-offs. | 1 | GDPval-AA (0.30)<br />LMArena Text: Hard prompts (0.25)<br />AA Intelligence Index v4.3 (0.20)<br />tau3-bench Banking (0.15)<br />LMArena Text: Instruction following (0.10) |
+
+### Vision
+
+| Task type | Description | Turns | Benchmarks (weight) |
+| --- | --- | --- | --- |
+| `vision_understanding` | Answer or act using one or more provided images: photos, screenshots, charts, documents, handwriting, medical or scientific images. | 1 | MMMU-Pro (0.50)<br />LMArena Vision arena (0.39)<br />SimpleQA Verified (0.11) |
+
+## Policies and task types
+
+Every policy starts from the same classification. They differ in how they use it:
+
+| Policy | Uses |
+| --- | --- |
+| `balanced` | The mixed benchmark vector of every task type at 5% probability or more, against price and latency. The default. |
+| `cost_efficient` | The same vector, only to set the quality bar; then the cheapest model above it. |
+| `capability_heavy` | The same vector, highest expected quality wins. |
+| `domain_skills` | The most probable task type alone, on its specialist benchmarks: the broad indexes and overall arenas are dropped from its vector, and a model ranked in the top three on its primary benchmark gets a small bonus. |
+
+Fix the task type when you already know it: `"task_type": "translation"` skips the task-type classification. Difficulty and facets are still classified, and `classification.task_type.fixed` is `true`. `domain` does the same with the coarse vocabulary and routes as that domain's default task type; `task_type` wins when you send both. An id that is not in the list is `400 invalid_body`.
+
+## Related
+
+- [Model Router](/guides/model-router) - send a selection request and read the ranking.
+- [Decision runs](/guides/decision-runs) - the run a selection is billed as.
+- [Models and pricing](/getting-started/models-and-pricing) - what Neon 1.1 costs.
+- [Limits](/reference/limits) - body size, input tokens and deadlines.

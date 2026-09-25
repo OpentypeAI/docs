@@ -107,7 +107,7 @@ resp = requests.post(
         },
         "max_output_tokens": 64,
     },
-    timeout=130,
+    timeout=160,
 )
 err = resp.json().get("error", {})
 if err.get("code") == "verdict_schema_violation":

@@ -123,7 +123,7 @@ This page takes you from no account to a completed decision run: one request tha
             "think_tokens": 64,
             "max_output_tokens": 16,
         },
-        timeout=130,  # above the 120 s maximum deadline
+        timeout=160,  # above the 150 s maximum deadline
     )
     run = res.json()
     if not res.ok:
@@ -232,8 +232,8 @@ If a run fails with a `503` or `504` before any model served it, send the retry 
 | `400` [`idempotency_key_required`](/problems/idempotency_key_required) | No `Idempotency-Key` header on `POST /v1/runs`. | Send one, 1 to 255 bytes. |
 | `400` [`invalid_body`](/problems/invalid_body) | Invalid JSON, a missing `Content-Type: application/json`, an unknown field, or no `max_output_tokens`. | Read `error.message`; it names the problem. |
 | `400` [`invalid_decision_questions`](/problems/invalid_decision_questions) | The question set breaks a bound, for example a `choice` with one option. | See the bounds on [Decision questions](/getting-started/decision-questions#bounds). |
-| `402` [`insufficient_credits`](/problems/insufficient_credits) | Your available balance is below the \$0.005 a run holds while it is in flight. | Verify your email to receive the free credit, or [buy credits](/guides/credits-and-billing). |
-| `413` [`input_too_large`](/problems/input_too_large) | The state and questions do not fit the 3,968-token context of Neon 1.1. | Send a smaller `state`. |
+| `402` [`insufficient_credits`](/problems/insufficient_credits) | Your available balance is below the \$0.02 a run holds while it is in flight. | Verify your email to receive the free credit, or [buy credits](/guides/credits-and-billing). |
+| `413` [`input_too_large`](/problems/input_too_large) | The state and questions do not fit the 262,144-token context of Neon 1.1. | Send a smaller `state`. |
 | `503` [`decision_unavailable`](/problems/decision_unavailable) | The question set could not be read, or no route could serve it now. | Retry later with a new `Idempotency-Key`. |
 
 Every error body has the same shape. Branch on `code`, and log `request_id`:
