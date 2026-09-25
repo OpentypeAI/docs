@@ -71,10 +71,13 @@ console.log(d.answer);
 Build `opentype-js` as above, then register its MCP server. For Claude Code:
 
 ```bash
-claude mcp add opentype --scope user -e OPENTYPE_API_KEY=otsk_... -- node /path/to/opentype-js/packages/mcp/dist/bin.js
+export OPENTYPE_API_KEY="otsk_..."   # your full key
+claude mcp add opentype --scope user -e OPENTYPE_API_KEY="$OPENTYPE_API_KEY" -- node /path/to/opentype-js/packages/mcp/dist/bin.js
 ```
 
-The [Claude Code plugin](https://github.com/OpentypeAI/opentype-claude-plugin) adds skills and slash commands on top, and its `other-agents` folder has the same server configured for Codex, Cursor, VS Code and OpenCode. The decide, verdict and route tools spend credit; the other three are free.
+The decide, verdict and route tools spend credit; the other three are free.
+
+The [Claude Code plugin](https://github.com/OpentypeAI/opentype-claude-plugin) adds skills and slash commands, and its `other-agents` folder configures the same server for Codex, Cursor, VS Code and OpenCode. Its bundled MCP server runs `npx -y @opentype/mcp`, which is not on npm yet, so that server does not start after installing the plugin. The skills and commands work with the server you registered above. Disable the plugin's bundled server in `/mcp`, or point the plugin's `.mcp.json` at the local build as described in [its README](https://github.com/OpentypeAI/opentype-claude-plugin#install).
 
 ## Retries and idempotency in the SDKs
 
